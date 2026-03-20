@@ -38,8 +38,8 @@ const OptimizerUI = (() => {
 
           <div class="opt-param-row opt-target-row">
             <label for="opt-maxGrade">Max Segment Grade</label>
-            <input type="range" id="opt-maxGrade" min="5" max="25" step="1" value="12">
-            <span class="opt-val" id="opt-maxGrade-val">12%</span>
+            <input type="range" id="opt-maxGrade" min="5" max="40" step="1" value="25">
+            <span class="opt-val" id="opt-maxGrade-val">25%</span>
           </div>
 
           <div class="opt-freeze-section">
@@ -54,7 +54,7 @@ const OptimizerUI = (() => {
           <details class="opt-advanced">
             <summary>Advanced Parameters &mdash; &#x26A0;&#xFE0F; Warning: instability and explosions ahead</summary>
             <div class="opt-param-grid">
-              ${paramRow('vertexSpacing', 'Vertex Spacing', 2, 20, 1, 5, 'm')}
+              ${paramRow('vertexSpacing', 'Vertex Spacing', 2, 20, 1, 10, 'm')}
               ${paramRow('maxDrift', 'Max Drift', 50, 500, 10, 200, 'm')}
               ${paramRow('stepSize', 'Step Size', 0.05, 1.0, 0.05, 0.3, '')}
               ${paramRow('wElev', 'Elevation Force', 1, 20, 0.5, 7.0, '')}

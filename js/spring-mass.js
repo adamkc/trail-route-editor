@@ -15,8 +15,8 @@ const SpringMass = (() => {
   // ── Default parameters (matching R grid-search winners) ──
   const DEFAULTS = {
     targetGrade:    0.07,
-    maxGrade:       0.12,   // hard cap: segments above this grade get extra correction
-    vertexSpacing:  5,
+    maxGrade:       0.25,   // hard cap: segments above this grade get extra correction
+    vertexSpacing:  10,
     maxDrift:       200,
     stepSize:       0.3,
     maxIter:        2000,
@@ -223,6 +223,9 @@ const SpringMass = (() => {
       }
 
       // 5. Slope cap force — push vertices sideways when segment grade exceeds maxGrade
+      // Uses escalating strength: the more over the cap, the harder the push.
+      // Also scales up over iterations so early iterations focus on shape,
+      // later iterations enforce the cap more strictly.
       if (wSlopeCap > 0 && maxGrade > 0) {
         for (let j = 1; j < n - 1; j++) {
           // Check both adjacent segments (j-1→j and j→j+1)
@@ -237,28 +240,26 @@ const SpringMass = (() => {
             const grade = dElev / segLen;
             if (grade <= maxGrade) continue;
 
-            // How much longer the segment needs to be to meet maxGrade
-            const neededLen = dElev / maxGrade;
-            const deficit = neededLen - segLen;
+            // How far over the cap (ratio > 1 means over)
+            const overRatio = grade / maxGrade;
+            // Exponential penalty: stronger the further over the cap
+            const penalty = (overRatio - 1) * overRatio;
 
             // Push vertex j perpendicular to the segment direction
-            // (along the contour = sideways, which lengthens without changing elevation much)
-            const perpX = -dy / segLen;  // perpendicular unit vector
+            const perpX = -dy / segLen;
             const perpY =  dx / segLen;
 
             // Use aspect to choose which perpendicular direction follows the contour
             const asp = sampleAspectUTM(coords[j * 2], coords[j * 2 + 1]);
             let sign = 1;
             if (!isNaN(asp)) {
-              // Aspect points downhill; contour is perpendicular to aspect
-              // Pick the perpendicular direction more aligned with the contour
-              const contourX = Math.cos(asp);  // ~contour direction
+              const contourX = Math.cos(asp);
               const contourY = -Math.sin(asp);
               const dot = perpX * contourX + perpY * contourY;
               sign = dot >= 0 ? 1 : -1;
             }
 
-            const strength = wSlopeCap * Math.min(deficit / segLen, 2.0);
+            const strength = wSlopeCap * Math.min(penalty, 5.0);
             force[j * 2]     += strength * sign * perpX;
             force[j * 2 + 1] += strength * sign * perpY;
           }
@@ -319,9 +320,9 @@ const SpringMass = (() => {
     return { mse, length: currentLen, exploded, maxSegGrade };
   }
 
-  // ── Smooth result (3-point moving average + Douglas-Peucker) ──
+  // ── Smooth result (3-point moving average + grade-aware Douglas-Peucker) ──
 
-  function smoothCoords(coords, n) {
+  function smoothCoords(coords, n, raster, maxGradeLimit) {
     const out = new Float64Array(n * 2);
     // Copy endpoints
     out[0] = coords[0]; out[1] = coords[1];
@@ -331,14 +332,14 @@ const SpringMass = (() => {
       out[j * 2]     = (coords[(j - 1) * 2]     + coords[j * 2]     + coords[(j + 1) * 2]) / 3;
       out[j * 2 + 1] = (coords[(j - 1) * 2 + 1] + coords[j * 2 + 1] + coords[(j + 1) * 2 + 1]) / 3;
     }
-    // Douglas-Peucker simplification (0.5m tolerance)
-    return douglasPeucker(out, n, 0.5);
+    // Grade-aware Douglas-Peucker simplification (0.5m tolerance)
+    return douglasPeucker(out, n, 0.5, raster, maxGradeLimit);
   }
 
-  function douglasPeucker(flatCoords, n, tolerance) {
+  function douglasPeucker(flatCoords, n, tolerance, raster, maxGradeLimit) {
     const keep = new Uint8Array(n);
     keep[0] = 1; keep[n - 1] = 1;
-    dpRecurse(flatCoords, 0, n - 1, tolerance, keep);
+    dpRecurse(flatCoords, 0, n - 1, tolerance, keep, raster, maxGradeLimit);
     const result = [];
     for (let i = 0; i < n; i++) {
       if (keep[i]) result.push([flatCoords[i * 2], flatCoords[i * 2 + 1]]);
@@ -346,7 +347,7 @@ const SpringMass = (() => {
     return result;
   }
 
-  function dpRecurse(coords, start, end, tol, keep) {
+  function dpRecurse(coords, start, end, tol, keep, raster, maxGradeLimit) {
     if (end - start < 2) return;
     let maxDist = 0, maxIdx = start;
     const ax = coords[start * 2], ay = coords[start * 2 + 1];
@@ -365,10 +366,30 @@ const SpringMass = (() => {
       }
       if (dist > maxDist) { maxDist = dist; maxIdx = i; }
     }
+
     if (maxDist > tol) {
       keep[maxIdx] = 1;
-      dpRecurse(coords, start, maxIdx, tol, keep);
-      dpRecurse(coords, maxIdx, end, tol, keep);
+      dpRecurse(coords, start, maxIdx, tol, keep, raster, maxGradeLimit);
+      dpRecurse(coords, maxIdx, end, tol, keep, raster, maxGradeLimit);
+    } else if (raster && maxGradeLimit > 0) {
+      // Before removing all interior points, check if the resulting segment
+      // would exceed maxGrade. If so, keep the point that has the most
+      // elevation deviation to preserve the optimizer's grade work.
+      const segLen = Math.sqrt(lenSq);
+      if (segLen > 0.1) {
+        const eStart = sampleElevUTM(ax, ay, raster);
+        const eEnd = sampleElevUTM(bx, by, raster);
+        if (!isNaN(eStart) && !isNaN(eEnd)) {
+          const grade = Math.abs(eEnd - eStart) / segLen;
+          if (grade > maxGradeLimit) {
+            // Force-keep the midpoint to break the steep segment
+            const mid = Math.floor((start + end) / 2);
+            keep[mid] = 1;
+            dpRecurse(coords, start, mid, tol, keep, raster, maxGradeLimit);
+            dpRecurse(coords, mid, end, tol, keep, raster, maxGradeLimit);
+          }
+        }
+      }
     }
   }
 
@@ -636,8 +657,8 @@ const SpringMass = (() => {
       }
     }
 
-    // Smooth the result
-    const smoothedUTM = smoothCoords(finalCoords, n);
+    // Smooth the result (pass raster + maxGrade so DP won't re-introduce steep segments)
+    const smoothedUTM = smoothCoords(finalCoords, n, raster, P.maxGrade);
 
     // Convert back to WGS84
     const resultCoords = smoothedUTM.map(([e, n]) => {

@@ -1,8 +1,16 @@
-# Trail Editor
+# Trail Route Editor
 
 Interactive web-based tool for viewing and editing trail GPS data with elevation profiles, slope analysis, route optimization, and vertex editing.
 
-## Quick Start
+## Live Demo
+
+**[https://adamkc.github.io/trail-route-editor/](https://adamkc.github.io/trail-route-editor/)**
+
+No installation required — load your own GeoJSON trail and GeoTIFF DEM files directly in the browser.
+
+## Local Development (with Python server)
+
+The local server adds GeoPackage (.gpkg) support and server-side caching. The app auto-detects whether a server is available and works either way.
 
 ### Windows
 Double-click **`start.bat`** — it auto-detects Python (checks QGIS installations first, then system Python).
@@ -23,11 +31,14 @@ The app opens at [http://localhost:8080](http://localhost:8080). If that port is
 
 ## Requirements
 
-### Required
-- **Python 3.8+** — comes bundled with QGIS, or install from [python.org](https://www.python.org/downloads/)
+### Browser-only (GitHub Pages / static hosting)
+- A modern browser (Chrome, Firefox, Edge)
+- Your own GeoJSON trail file and GeoTIFF DEM file
+- No installation needed
 
-### Optional (for .gpkg file support)
-- **GDAL/OGR tools** (`ogrinfo`, `ogr2ogr`) — needed only if you want to load GeoPackage files
+### Local server (optional, for extra features)
+- **Python 3.8+** — comes bundled with QGIS, or install from [python.org](https://www.python.org/downloads/)
+- **GDAL/OGR tools** (`ogrinfo`, `ogr2ogr`) — needed only for GeoPackage (.gpkg) file support
   - **Windows:** Install [QGIS](https://qgis.org) (includes GDAL) or [OSGeo4W](https://trac.osgeo.org/osgeo4w/)
   - **macOS:** `brew install gdal`
   - **Linux:** `sudo apt install gdal-bin`
@@ -84,8 +95,9 @@ Hidden behind a collapsible panel ("Warning: instability and explosions ahead"):
 A quick-reference guide is shown in the bottom-right corner with all keyboard shortcuts and mouse interactions.
 
 ### Caching
-- **Contour cache** — generated contours are saved to `cache/` on the server; subsequent loads with the same DEM skip regeneration
-- Cache persists between app restarts
+- **With local server:** contours are saved to `cache/` on disk; subsequent loads with the same DEM skip regeneration
+- **Without server (browser-only):** contours are cached in IndexedDB; persists across page refreshes
+- Cache persists between app restarts in both modes
 
 ### Export
 - Export edited trails as GeoJSON
@@ -119,30 +131,36 @@ The `data/` folder contains sample data. You can also load files from anywhere i
 ## Project Structure
 
 ```
-web-editor/
+trail-route-editor/
   index.html              Main page
-  style.css               Styles
-  serve.py                Python HTTP server with API endpoints
+  css/style.css           Styles
+  serve.py                Python HTTP server with API endpoints (local only)
   start.bat               Windows launcher (auto-detects Python)
   start.sh                Mac/Linux launcher
   js/
     app.js                Main application logic, file loading, chart wiring
     map.js                MapLibre map setup, layers, 3D terrain, hillshade
+    file-picker.js        Dual-mode file loading (server API or browser file input)
     vertex-editor.js      Vertex drag/add/delete, freeze system, undo/redo
     spring-mass.js        Spring-mass route optimizer (ported from R)
     optimizer-ui.js       Optimizer modal dialog and parameter controls
     dem-sampler.js        GeoTIFF DEM loading and elevation sampling
     contour-generator.js  Marching-squares contour line generation
     projection.js         UTM/WGS84 coordinate projection
+    profile-charts.js     Elevation and slope chart rendering
+    stats-panel.js        Trail statistics display
+    trail-metrics.js      Grade/distance/elevation computation
     export.js             GeoJSON export
-  data/                   Sample trail and DEM data
-  cache/                  Auto-generated contour cache (created on first run)
+  data/                   Sample trail data (DEM files excluded from repo)
+  cache/                  Auto-generated contour cache (local server only)
 ```
 
 ## Troubleshooting
 
 - **Port in use:** The server auto-tries ports 8080-8089. Or specify one: `python serve.py 9000`
-- **GPKG files not loading:** Install GDAL tools (see Requirements above)
+- **GPKG files not loading:** Install GDAL tools (see Requirements above). In browser-only mode, use GeoJSON files instead.
 - **Blank map:** Make sure a DEM is loaded — the hillshade is rendered dynamically from the DEM
 - **Optimizer explodes:** Try reducing Step Size, or increase Max Iterations. The retry system automatically attempts smaller step sizes on failure.
 - **Dark hillshade:** The native hillshade requires the DEM to be loaded first. Check that a `.tif` file is selected in the DEM dropdown.
+- **Map becomes unresponsive:** Click the Recenter button to reset pitch and refit the map to trail bounds.
+- **Large DEM files:** Files over 50 MB may take a moment to load in the browser. The local server streams them more efficiently.
