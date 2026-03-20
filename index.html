@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trail Editor</title>
+
+  <!-- MapLibre GL JS -->
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+
+  <!-- proj4js -->
+  <script src="https://cdn.jsdelivr.net/npm/proj4@2.12.1/dist/proj4.js"></script>
+
+  <!-- GeoTIFF.js -->
+  <script src="https://cdn.jsdelivr.net/npm/geotiff@2.1.3/dist-browser/geotiff.js"></script>
+
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- Toolbar -->
+  <div id="toolbar">
+    <div class="toolbar-group">
+      <label for="trail-selector">Trail:</label>
+      <select id="trail-selector">
+        <option value="__all__">All Trails</option>
+      </select>
+    </div>
+    <div class="toolbar-group">
+      <label>Basemap:</label>
+      <button id="btn-hillshade" class="basemap-btn active">Hillshade</button>
+      <button id="btn-satellite" class="basemap-btn">Satellite</button>
+    </div>
+    <div class="toolbar-group">
+      <button id="btn-load-trails" title="Load trails from a project file">Load Trails</button>
+      <button id="btn-load-dem" title="Load a different DEM">Load DEM</button>
+    </div>
+    <div class="toolbar-group">
+      <button id="btn-undo" title="Undo last vertex move">Undo</button>
+      <button id="btn-export" title="Export edited trails as GeoJSON">Export</button>
+    </div>
+    <div class="toolbar-group">
+      <button id="btn-optimize" title="Run spring-mass optimizer on selected trail">Optimize Route</button>
+      <button id="btn-recenter" title="Reset map: flat view, fit to trails">Recenter</button>
+    </div>
+    <div id="status-bar"></div>
+  </div>
+
+  <!-- Main content -->
+  <div id="main">
+    <!-- Map — full width -->
+    <div id="map-container">
+      <div id="map"></div>
+      <div id="elev-tooltip" class="tooltip hidden"></div>
+    </div>
+
+    <!-- Bottom panel -->
+    <div id="resize-handle"></div>
+    <div id="bottom-panel">
+      <!-- Stats + segment table (narrow left column) -->
+      <div id="stats-column">
+        <div id="stats-panel" class="panel">
+          <h3>Trail Statistics</h3>
+          <div id="stats-grid">
+            <div class="stat-item">
+              <span class="stat-label">Length</span>
+              <span class="stat-value" id="stat-length">—</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Elev Min</span>
+              <span class="stat-value" id="stat-elev-min">—</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Elev Max</span>
+              <span class="stat-value" id="stat-elev-max">—</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Gain</span>
+              <span class="stat-value" id="stat-gain">—</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Loss</span>
+              <span class="stat-value" id="stat-loss">—</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Avg Grade</span>
+              <span class="stat-value" id="stat-avg-grade">—</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Max Grade</span>
+              <span class="stat-value" id="stat-max-grade">—</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">&gt;8%</span>
+              <span class="stat-value" id="stat-over8">—</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">&gt;12%</span>
+              <span class="stat-value" id="stat-over12">—</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Reversals/100m</span>
+              <span class="stat-value" id="stat-reversals">—</span>
+            </div>
+          </div>
+        </div>
+        <div id="segment-table-panel" class="panel">
+          <h3>Segments</h3>
+          <div id="segment-table-container">
+            <table id="segment-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Dist (m)</th>
+                  <th>Elev (m)</th>
+                  <th>Grade %</th>
+                  <th>Dir</th>
+                </tr>
+              </thead>
+              <tbody id="segment-table-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Charts (wide right area) -->
+      <div id="charts-column">
+        <div id="elev-chart-panel" class="panel">
+          <h3>Elevation Profile</h3>
+          <canvas id="elev-chart"></canvas>
+        </div>
+        <div id="slope-chart-panel" class="panel">
+          <h3>Slope Profile</h3>
+          <canvas id="slope-chart"></canvas>
+        </div>
+      </div>
+
+      <!-- Help panel -->
+      <div id="help-column">
+        <div class="panel help-panel">
+          <h3>Controls</h3>
+          <dl class="help-list">
+            <dt>Drag vertex</dt>
+            <dd>Click &amp; drag a white dot to move it</dd>
+            <dt>Add vertex</dt>
+            <dd>Right-click on a trail line</dd>
+            <dt>Delete vertex</dt>
+            <dd>Right-click on an existing vertex</dd>
+            <dt>Freeze vertex</dt>
+            <dd>Shift+click a vertex (turns blue)</dd>
+            <dt>Freeze range</dt>
+            <dd>Shift+click vertex A, then shift+click vertex B</dd>
+            <dt>Tilt map (3D)</dt>
+            <dd>Right-click + drag on map</dd>
+            <dt>Zoom to location</dt>
+            <dd>Click on elevation or slope chart</dd>
+            <dt>Undo</dt>
+            <dd>Ctrl+Z or Undo button</dd>
+            <dt>Optimize</dt>
+            <dd>Select a trail, then click Optimize Route</dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- File picker modal -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title">Load File</h3>
+        <button id="modal-close" class="modal-close-btn">&times;</button>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- App modules -->
+  <script src="js/file-picker.js"></script>
+  <script src="js/projection.js"></script>
+  <script src="js/dem-sampler.js"></script>
+  <script src="js/contour-generator.js"></script>
+  <script src="js/trail-metrics.js"></script>
+  <script src="js/profile-charts.js"></script>
+  <script src="js/stats-panel.js"></script>
+  <script src="js/vertex-editor.js"></script>
+  <script src="js/export.js"></script>
+  <script src="js/spring-mass.js"></script>
+  <script src="js/optimizer-ui.js"></script>
+  <script src="js/map.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

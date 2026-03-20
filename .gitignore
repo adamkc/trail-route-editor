@@ -1,0 +1,23 @@
+# Large data files (users load their own)
+data/dem_cropped.tif
+data/dem_full.tif
+data/hillshade.png
+
+# Server-side cache (regenerated automatically)
+cache/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
