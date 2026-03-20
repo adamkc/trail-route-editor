@@ -669,13 +669,62 @@ const VertexEditor = (() => {
     return findTrail(name);
   }
 
+  /**
+   * Densify a trail by inserting evenly-spaced vertices.
+   * @param {string} trailName
+   * @param {number} spacing - target spacing in meters
+   * @returns {number} new vertex count, or 0 if failed
+   */
+  async function densifyTrail(trailName, spacing) {
+    const trail = findTrail(trailName);
+    if (!trail) return 0;
+    const coords = trail.geometry.coordinates;
+    if (coords.length < 2) return 0;
+
+    // Compute cumulative distance (great-circle via Projection.distanceM)
+    const cumDist = [0];
+    for (let i = 1; i < coords.length; i++) {
+      cumDist.push(cumDist[i - 1] + Projection.distanceM(coords[i - 1], coords[i]));
+    }
+    const totalLen = cumDist[coords.length - 1];
+    if (totalLen < spacing) return coords.length; // too short to densify
+
+    // Generate new evenly-spaced coords
+    const nVerts = Math.max(3, Math.round(totalLen / spacing) + 1);
+    const newCoords = [];
+    let segIdx = 0;
+    for (let v = 0; v < nVerts; v++) {
+      const targetDist = (v / (nVerts - 1)) * totalLen;
+      // Advance segment index
+      while (segIdx < coords.length - 2 && cumDist[segIdx + 1] < targetDist) segIdx++;
+      const segLen = cumDist[segIdx + 1] - cumDist[segIdx];
+      const t = segLen > 0 ? (targetDist - cumDist[segIdx]) / segLen : 0;
+      const c0 = coords[segIdx];
+      const c1 = coords[segIdx + 1];
+      newCoords.push([
+        c0[0] + t * (c1[0] - c0[0]),
+        c0[1] + t * (c1[1] - c0[1])
+      ]);
+    }
+
+    // Sample elevations for new coords
+    let newElevs = null;
+    if (DemSampler.isLoaded()) {
+      newElevs = await DemSampler.sampleBatch(newCoords);
+    }
+
+    // Update trail with new coords (this handles undo, metrics, etc.)
+    setTrailCoords(trailName, newCoords, newElevs, true);
+    return newCoords.length;
+  }
+
   return {
     init, loadElevations, selectTrail, undo,
     getTrailData, getMetrics, getAllMetrics, getElevations,
     recomputeTrail, refreshMapSources,
     setTrailCoords, setTrailCoordsLive,
     addTrailFeature, removeTrailFeature,
-    getTrailFeature,
+    getTrailFeature, densifyTrail,
     getFrozenArray, freezeByGrade, clearFrozen, getFrozenCount
   };
 })();

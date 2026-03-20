@@ -3,13 +3,24 @@
  */
 const Export = (() => {
 
+  function mergeWaypoints(trailData) {
+    if (typeof Waypoints === 'undefined' || Waypoints.getCount() === 0) return trailData;
+    const wpGeoJSON = Waypoints.getWaypointsGeoJSON();
+    return {
+      type: 'FeatureCollection',
+      features: [...trailData.features, ...wpGeoJSON.features]
+    };
+  }
+
   function downloadGeoJSON(trailData) {
-    const json = JSON.stringify(trailData, null, 2);
+    const merged = mergeWaypoints(trailData);
+    const json = JSON.stringify(merged, null, 2);
     download(json, 'edited_trails.geojson', 'application/geo+json');
   }
 
   function downloadKML(trailData) {
-    const kml = KmlUtils.geojsonToKML(trailData);
+    const merged = mergeWaypoints(trailData);
+    const kml = KmlUtils.geojsonToKML(merged);
     download(kml, 'edited_trails.kml', 'application/vnd.google-earth.kml+xml');
   }
 

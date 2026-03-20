@@ -22,6 +22,7 @@ const ProfileCharts = (() => {
     },
     scales: {
       x: {
+        type: 'linear',
         ticks: { color: '#888', font: { size: 10 } },
         grid: { color: 'rgba(255,255,255,0.05)' }
       },
@@ -56,12 +57,11 @@ const ProfileCharts = (() => {
     onHoverCallback = hoverCb;
     onClickCallback = clickCb || null;
 
-    // Shared hover handler for both charts
+    // Shared hover handler — reads the x value (distance) from parsed data
     function handleHover(evt, elements, chart) {
       if (!onHoverCallback) return;
       if (elements.length > 0) {
-        const idx = elements[0].index;
-        const dist = parseFloat(chart.data.labels[idx]);
+        const dist = elements[0].element.$context.parsed.x;
         const coord = coordAtDistance(dist);
         if (coord) onHoverCallback(coord);
       }
@@ -70,8 +70,7 @@ const ProfileCharts = (() => {
     function handleClick(evt, elements, chart) {
       if (!onClickCallback) return;
       if (elements.length > 0) {
-        const idx = elements[0].index;
-        const dist = parseFloat(chart.data.labels[idx]);
+        const dist = elements[0].element.$context.parsed.x;
         const coord = coordAtDistance(dist);
         if (coord) onClickCallback(coord);
       }
@@ -81,19 +80,19 @@ const ProfileCharts = (() => {
       if (onHoverCallback) onHoverCallback(null);
     }
 
-    // Elevation profile
+    // Elevation profile — scatter with line (linear x-axis)
     const elevCtx = document.getElementById('elev-chart').getContext('2d');
     elevChart = new Chart(elevCtx, {
-      type: 'line',
+      type: 'scatter',
       plugins: [crosshairPlugin],
       data: {
-        labels: [],
         datasets: [{
           data: [],
           borderColor: '#4ecdc4',
           backgroundColor: 'rgba(78, 205, 196, 0.15)',
           fill: true,
           borderWidth: 1.5,
+          showLine: true,
           pointRadius: 0,
           pointHoverRadius: 5,
           pointHoverBackgroundColor: '#e94560',
@@ -119,7 +118,7 @@ const ProfileCharts = (() => {
           ...chartDefaults.plugins,
           tooltip: {
             callbacks: {
-              label: (ctx) => `${ctx.parsed.y != null ? ctx.parsed.y.toFixed(1) : '?'}m @ ${ctx.parsed.x}m`
+              label: (ctx) => `${ctx.parsed.y != null ? ctx.parsed.y.toFixed(1) : '?'}m @ ${ctx.parsed.x.toFixed(0)}m`
             }
           }
         }
@@ -129,7 +128,7 @@ const ProfileCharts = (() => {
     // Register mouseleave on the canvas
     elevChart.canvas.addEventListener('mouseleave', handleLeave);
 
-    // Slope profile
+    // Slope profile — bar chart with linear x-axis
     const slopeCtx = document.getElementById('slope-chart').getContext('2d');
     // Plugin to draw * on bars that exceed ±30%
     const clippedBarPlugin = {
@@ -168,28 +167,41 @@ const ProfileCharts = (() => {
         }]
       },
       options: {
-        ...chartDefaults,
-        onHover: handleHover,
-        onClick: handleClick,
-        scales: {
-          ...chartDefaults.scales,
-          x: {
-            ...chartDefaults.scales.x,
-            title: { display: true, text: 'Distance (m)', color: '#888', font: { size: 10 } },
-            ticks: { display: false }
-          },
-          y: {
-            ...chartDefaults.scales.y,
-            min: -30,
-            max: 30,
-            title: { display: true, text: 'Grade (%)', color: '#888', font: { size: 10 } }
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 0 },
+        interaction: { mode: 'index', intersect: false },
+        onHover: (evt, elements, chart) => {
+          if (!onHoverCallback || elements.length === 0) return;
+          const idx = elements[0].index;
+          // Get distance from stored segment data
+          if (idx < currentSegments.length) {
+            const dist = currentSegments[idx].distStart + currentSegments[idx].length / 2;
+            const coord = coordAtDistance(dist);
+            if (coord) onHoverCallback(coord);
+          }
+        },
+        onClick: (evt, elements, chart) => {
+          if (!onClickCallback || elements.length === 0) return;
+          const idx = elements[0].index;
+          if (idx < currentSegments.length) {
+            const dist = currentSegments[idx].distStart + currentSegments[idx].length / 2;
+            const coord = coordAtDistance(dist);
+            if (coord) onClickCallback(coord);
           }
         },
         plugins: {
-          ...chartDefaults.plugins,
+          legend: { display: false },
           tooltip: {
             callbacks: {
-              // Show the REAL value in tooltip, not the clamped one
+              title: (items) => {
+                if (items.length === 0) return '';
+                const idx = items[0].dataIndex;
+                if (idx < currentSegments.length) {
+                  return `${currentSegments[idx].distStart.toFixed(0)} – ${currentSegments[idx].distEnd.toFixed(0)} m`;
+                }
+                return '';
+              },
               label: (ctx) => {
                 const chart = ctx.chart;
                 const realVal = chart._clippedBars && chart._clippedBars[ctx.dataIndex] != null
@@ -198,6 +210,21 @@ const ProfileCharts = (() => {
                 return `${realVal != null ? realVal.toFixed(1) : '?'}% grade`;
               }
             }
+          }
+        },
+        scales: {
+          x: {
+            type: 'category',
+            ticks: { display: false, color: '#888', font: { size: 10 } },
+            grid: { color: 'rgba(255,255,255,0.05)' },
+            title: { display: true, text: 'Distance (m)', color: '#888', font: { size: 10 } }
+          },
+          y: {
+            min: -30,
+            max: 30,
+            ticks: { color: '#888', font: { size: 10 } },
+            grid: { color: 'rgba(255,255,255,0.08)' },
+            title: { display: true, text: 'Grade (%)', color: '#888', font: { size: 10 } }
           }
         }
       }
@@ -239,22 +266,19 @@ const ProfileCharts = (() => {
     currentSegments = segments;
     if (coords) currentCoords = coords;
 
-    // Elevation profile
-    const elevLabels = [];
+    // Elevation profile — {x: distance, y: elevation} points
     const elevData = [];
     if (segments.length > 0) {
-      elevLabels.push(0);
-      elevData.push(segments[0].elevStart);
+      elevData.push({ x: 0, y: segments[0].elevStart });
       for (const seg of segments) {
-        elevLabels.push(Math.round(seg.distEnd));
-        elevData.push(seg.elevEnd);
+        elevData.push({ x: seg.distEnd, y: seg.elevEnd });
       }
     }
-    elevChart.data.labels = elevLabels;
     elevChart.data.datasets[0].data = elevData;
     elevChart.update('none');
 
-    // Slope profile — clamp visual to ±30%, flag clipped bars
+    // Slope profile — still categorical (bars need equal width visually)
+    // but labels show actual distance values
     const SLOPE_CAP = 30;
     const slopeLabels = segments.map(s => Math.round(s.distStart));
     const rawSlope = segments.map(s => s.gradePct);
@@ -272,7 +296,6 @@ const ProfileCharts = (() => {
     currentSegments = [];
     currentCoords = [];
     if (elevChart) {
-      elevChart.data.labels = [];
       elevChart.data.datasets[0].data = [];
       elevChart.update('none');
     }
@@ -283,5 +306,14 @@ const ProfileCharts = (() => {
     }
   }
 
-  return { init, update, clear };
+  function resize() {
+    if (elevChart) elevChart.resize();
+    if (slopeChart) slopeChart.resize();
+  }
+
+  function getLastData() {
+    return { segments: currentSegments, coords: currentCoords };
+  }
+
+  return { init, update, clear, resize, getLastData };
 })();

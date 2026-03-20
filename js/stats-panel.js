@@ -1,68 +1,94 @@
 /**
- * stats-panel.js — Summary stats and segment table rendering
+ * stats-panel.js — Comparison table of stats across all trails
  */
 const StatsPanel = (() => {
+  // Store metrics for all trails so the comparison table can be rebuilt
+  let allMetrics = {}; // { trailName: summary }
+  let selectedTrail = null;
 
-  function updateStats(summary) {
-    const set = (id, val) => {
-      const el = document.getElementById(id);
-      if (el) el.textContent = val;
-    };
+  const STAT_ROWS = [
+    { key: 'length_m',          label: 'Length',          fmt: v => `${v.toFixed(0)} m` },
+    { key: 'elev_min_m',        label: 'Elev Min',        fmt: v => `${v.toFixed(1)} m` },
+    { key: 'elev_max_m',        label: 'Elev Max',        fmt: v => `${v.toFixed(1)} m` },
+    { key: 'elev_gain_m',       label: 'Gain',            fmt: v => `${v.toFixed(1)} m` },
+    { key: 'elev_loss_m',       label: 'Loss',            fmt: v => `${v.toFixed(1)} m` },
+    { key: 'avg_grade_pct',     label: 'Avg Grade',       fmt: v => `${v.toFixed(1)}%` },
+    { key: 'max_grade_pct',     label: 'Max Grade',       fmt: v => `${v.toFixed(1)}%` },
+    { key: 'pct_over_8',        label: '>8%',             fmt: v => `${v.toFixed(1)}%` },
+    { key: 'pct_over_12',       label: '>12%',            fmt: v => `${v.toFixed(1)}%` },
+    { key: 'reversals_per_100m',label: 'Reversals/100m',  fmt: v => `${v.toFixed(1)}` }
+  ];
 
-    set('stat-length',    `${summary.length_m.toFixed(0)} m`);
-    set('stat-elev-min',  `${summary.elev_min_m.toFixed(1)} m`);
-    set('stat-elev-max',  `${summary.elev_max_m.toFixed(1)} m`);
-    set('stat-gain',      `${summary.elev_gain_m.toFixed(1)} m`);
-    set('stat-loss',      `${summary.elev_loss_m.toFixed(1)} m`);
-    set('stat-avg-grade', `${summary.avg_grade_pct.toFixed(1)}%`);
-    set('stat-max-grade', `${summary.max_grade_pct.toFixed(1)}%`);
-    set('stat-over8',     `${summary.pct_over_8.toFixed(1)}%`);
-    set('stat-over12',    `${summary.pct_over_12.toFixed(1)}%`);
-    set('stat-reversals', `${summary.reversals_per_100m.toFixed(1)}`);
+  function updateStats(summary, trailName) {
+    if (trailName) {
+      allMetrics[trailName] = summary;
+      selectedTrail = trailName;
+    }
+    rebuildTable();
   }
 
-  function updateSegmentTable(segments) {
-    const tbody = document.getElementById('segment-table-body');
-    if (!tbody) return;
+  function rebuildTable() {
+    const panel = document.getElementById('stats-panel');
+    if (!panel) return;
 
-    // For large trail, limit visible rows and use virtual scrolling concept
-    const maxRows = 300;
-    const showSegments = segments.length > maxRows
-      ? segments.slice(0, maxRows) : segments;
-
-    const rows = showSegments.map((seg, i) => {
-      const gc = seg.gradeClass;
-      const dirClass = seg.direction === 'uphill' ? 'dir-up' : 'dir-down';
-      const dirArrow = seg.direction === 'uphill' ? '&#x25B2;' : '&#x25BC;';
-
-      return `<tr>
-        <td>${i + 1}</td>
-        <td>${seg.distStart.toFixed(0)}</td>
-        <td>${seg.elevStart != null ? seg.elevStart.toFixed(1) : '—'}</td>
-        <td class="grade-cell ${gc.cssClass}">${seg.gradePct.toFixed(1)}</td>
-        <td class="${dirClass}">${dirArrow}</td>
-      </tr>`;
-    }).join('');
-
-    tbody.innerHTML = rows;
-
-    if (segments.length > maxRows) {
-      tbody.innerHTML += `<tr><td colspan="5" style="text-align:center;color:#888">
-        ... ${segments.length - maxRows} more segments</td></tr>`;
+    const names = Object.keys(allMetrics);
+    if (names.length === 0) {
+      panel.innerHTML = '<p style="color:#888;padding:10px;">No trail data</p>';
+      return;
     }
+
+    // Build comparison table: rows = stats, columns = trails
+    let html = '<div style="overflow-x:auto;overflow-y:auto;flex:1;">';
+    html += '<table class="stats-comparison-table"><thead><tr>';
+    html += '<th class="stats-metric-col">Metric</th>';
+    for (const name of names) {
+      const isSelected = name === selectedTrail;
+      const cls = isSelected ? ' class="stats-selected-col"' : '';
+      // Truncate long names
+      const shortName = name.length > 18 ? name.slice(0, 16) + '...' : name;
+      html += `<th${cls} title="${name}">${shortName}</th>`;
+    }
+    html += '</tr></thead><tbody>';
+
+    for (const row of STAT_ROWS) {
+      html += '<tr>';
+      html += `<td class="stats-metric-col">${row.label}</td>`;
+      for (const name of names) {
+        const summary = allMetrics[name];
+        const val = summary[row.key];
+        const isSelected = name === selectedTrail;
+        const cls = isSelected ? ' class="stats-selected-col"' : '';
+        html += `<td${cls}>${val != null ? row.fmt(val) : '—'}</td>`;
+      }
+      html += '</tr>';
+    }
+
+    html += '</tbody></table></div>';
+    panel.innerHTML = html;
+  }
+
+  // Legacy compatibility — still called but now we use the comparison table
+  function updateSegmentTable(segments) {
+    // No-op — segment table removed in favor of comparison table
+  }
+
+  function removeTrail(trailName) {
+    delete allMetrics[trailName];
+    rebuildTable();
   }
 
   function clear() {
-    const ids = ['stat-length', 'stat-elev-min', 'stat-elev-max', 'stat-gain',
-                 'stat-loss', 'stat-avg-grade', 'stat-max-grade', 'stat-over8',
-                 'stat-over12', 'stat-reversals'];
-    ids.forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.textContent = '—';
-    });
-    const tbody = document.getElementById('segment-table-body');
-    if (tbody) tbody.innerHTML = '';
+    // Don't clear allMetrics — just deselect
+    selectedTrail = null;
+    rebuildTable();
   }
 
-  return { updateStats, updateSegmentTable, clear };
+  function clearAll() {
+    allMetrics = {};
+    selectedTrail = null;
+    const panel = document.getElementById('stats-panel');
+    if (panel) panel.innerHTML = '';
+  }
+
+  return { updateStats, updateSegmentTable, clear, clearAll, removeTrail };
 })();

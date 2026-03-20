@@ -50,11 +50,20 @@
     return;
   }
 
-  // ---- 2. Initialize charts with map hover + click sync ----
-  ProfileCharts.init(
-    (lngLat) => { TrailMap.setHoverPoint(lngLat); },
-    (lngLat) => { TrailMap.getMap().flyTo({ center: lngLat, zoom: 17, duration: 600 }); }
-  );
+  // ---- 2. Initialize charts, tabs, comparison, waypoints ----
+  const hoverCb = (lngLat) => { TrailMap.setHoverPoint(lngLat); };
+  const clickCb = (lngLat) => { TrailMap.getMap().flyTo({ center: lngLat, zoom: 17, duration: 600 }); };
+  ProfileCharts.init(hoverCb, clickCb);
+  ComparisonChart.init(hoverCb, clickCb);
+  TabController.init();
+  TabController.registerResize('elevation', () => ProfileCharts.resize());
+  TabController.registerResize('slope', () => ProfileCharts.resize());
+  TabController.registerResize('comparison', () => ComparisonChart.resize());
+  TabController.setTabEnabled('comparison', false);
+
+  // Initialize waypoints (after map is ready)
+  Waypoints.init(TrailMap.getMap());
+
   selector = document.getElementById('trail-selector');
 
   // ---- 3. Load default trail data ----
@@ -177,6 +186,20 @@
   // ==== Dynamic loading functions ====
 
   function loadTrailsIntoApp(data) {
+    // Separate Point features (waypoints) from line features (trails)
+    const pointFeatures = data.features.filter(f =>
+      f.geometry && f.geometry.type === 'Point');
+    const lineFeatures = data.features.filter(f =>
+      f.geometry && f.geometry.type !== 'Point');
+
+    // Load waypoints from imported Points
+    if (pointFeatures.length > 0 && typeof Waypoints !== 'undefined') {
+      Waypoints.loadWaypoints(pointFeatures);
+      console.log(`[app] Loaded ${pointFeatures.length} waypoints from import`);
+    }
+
+    // Work with line features only for trails
+    data = { ...data, features: lineFeatures };
     trailData = data;
     trailNames = [];
 
@@ -220,8 +243,7 @@
           (f.properties.Name || f.properties.name) === trailName);
         const coords = trail ? trail.geometry.coordinates : [];
         ProfileCharts.update(result.segments, [], coords);
-        StatsPanel.updateStats(result.summary);
-        StatsPanel.updateSegmentTable(result.segments);
+        StatsPanel.updateStats(result.summary, trailName);
         TrailMap.showGradeSegments(result.segments, coords);
       }
     }
@@ -231,6 +253,11 @@
     if (demLoaded) {
       status('Sampling elevations...');
       VertexEditor.loadElevations().then(() => {
+        // Populate stats for all trails
+        for (const tn of trailNames) {
+          const m = VertexEditor.getMetrics(tn);
+          if (m) StatsPanel.updateStats(m.summary, tn);
+        }
         // Show first trail
         if (trailNames.length > 0) {
           selector.value = trailNames[0];
@@ -322,6 +349,11 @@
       // Re-sample elevations with new DEM
       if (trailData) {
         await VertexEditor.loadElevations();
+        // Rebuild stats for all trails
+        for (const tn of trailNames) {
+          const m = VertexEditor.getMetrics(tn);
+          if (m) StatsPanel.updateStats(m.summary, tn);
+        }
         const current = selector.value;
         if (current && current !== '__all__') {
           showTrailData(current);
@@ -340,10 +372,18 @@
     const name = e.target.value;
     VertexEditor.selectTrail(name === '__all__' ? null : name);
     TrailMap.highlightTrail(name);
+    // Clear drainage when switching trails
+    if (drainageActive) {
+      TrailMap.clearDrainageZones();
+      drainageActive = false;
+      document.getElementById('btn-drainage').classList.remove('active');
+    }
     if (name === '__all__') {
       StatsPanel.clear();
       ProfileCharts.clear();
+      ComparisonChart.clear();
       TrailMap.clearGradeSegments();
+      TabController.setTabEnabled('comparison', false);
     } else {
       showTrailData(name);
     }
@@ -394,6 +434,32 @@
     status('Map recentered');
   });
 
+  // ── Densify ──
+  document.getElementById('btn-densify').addEventListener('click', async () => {
+    const name = selector.value;
+    if (!name || name === '__all__') {
+      status('Select a specific trail first');
+      return;
+    }
+    const spacingStr = prompt('Vertex spacing (meters):', '10');
+    if (!spacingStr) return;
+    const spacing = parseFloat(spacingStr);
+    if (isNaN(spacing) || spacing < 1) {
+      status('Invalid spacing');
+      return;
+    }
+    const trail = trailData.features.find(f =>
+      (f.properties.Name || f.properties.name) === name);
+    if (!trail) return;
+    const oldCount = trail.geometry.coordinates.length;
+    status(`Densifying ${name} to ${spacing}m spacing...`);
+    const newCount = await VertexEditor.densifyTrail(name, spacing);
+    if (newCount > 0) {
+      showTrailData(name);
+      status(`Densified: ${oldCount} → ${newCount} vertices (${spacing}m spacing)`);
+    }
+  });
+
   document.getElementById('btn-optimize').addEventListener('click', () => {
     const name = selector.value;
     if (!name || name === '__all__') {
@@ -415,6 +481,55 @@
       return;
     }
     OptimizerUI.show(name, coords, elevs, metrics);
+  });
+
+  // ── Drainage Analysis ──
+  let drainageActive = false;
+  document.getElementById('btn-drainage').addEventListener('click', async () => {
+    const btnDrainage = document.getElementById('btn-drainage');
+    if (drainageActive) {
+      TrailMap.clearDrainageZones();
+      drainageActive = false;
+      btnDrainage.classList.remove('active');
+      status('Drainage analysis cleared');
+      return;
+    }
+    const name = selector.value;
+    if (!name || name === '__all__') {
+      status('Select a specific trail first');
+      return;
+    }
+    if (!DemSampler.isLoaded()) {
+      status('Load a DEM first');
+      return;
+    }
+    const trail = trailData.features.find(f =>
+      (f.properties.Name || f.properties.name) === name);
+    if (!trail) return;
+    const coords = trail.geometry.coordinates;
+    status('Analyzing drainage...');
+    const zones = await DrainageAnalysis.analyze(coords);
+    TrailMap.showDrainageZones(zones, coords);
+    drainageActive = true;
+    btnDrainage.classList.add('active');
+    const totalLen = zones.reduce((s, z) => s + z.length, 0);
+    status(`Found ${zones.length} drainage zone${zones.length !== 1 ? 's' : ''} (${totalLen.toFixed(0)}m total)`);
+  });
+
+  // ── Add Waypoint ──
+  document.getElementById('btn-waypoint').addEventListener('click', () => {
+    const btnWP = document.getElementById('btn-waypoint');
+    if (Waypoints.isPlacing()) {
+      Waypoints.stopPlacing();
+      btnWP.textContent = 'Add Waypoint';
+      btnWP.classList.remove('active');
+      status('Waypoint placement stopped');
+    } else {
+      Waypoints.startPlacing();
+      btnWP.textContent = 'Stop Placing';
+      btnWP.classList.add('active');
+      status('Click on map to place waypoints. Click button again to stop.');
+    }
   });
 
   // ── New Route (draw mode) ──
@@ -547,10 +662,44 @@
         : null;
       const coords = trailFeature ? trailFeature.geometry.coordinates : [];
       ProfileCharts.update(metrics.segments, [], coords);
-      StatsPanel.updateStats(metrics.summary);
-      StatsPanel.updateSegmentTable(metrics.segments);
+      StatsPanel.updateStats(metrics.summary, name);
       TrailMap.showGradeSegments(metrics.segments, coords);
+
+      // Update comparison chart if optimized version exists
+      updateComparisonTab(name);
     }
+  }
+
+  function updateComparisonTab(name) {
+    // Check for optimized trail (either direction)
+    let origName, optName;
+    if (name.endsWith(' - Optimized')) {
+      optName = name;
+      origName = name.replace(' - Optimized', '');
+    } else {
+      origName = name;
+      optName = name + ' - Optimized';
+    }
+
+    const origFeature = trailData ? trailData.features.find(f =>
+      (f.properties.Name || f.properties.name) === origName) : null;
+    const optFeature = trailData ? trailData.features.find(f =>
+      (f.properties.Name || f.properties.name) === optName) : null;
+
+    if (origFeature && optFeature) {
+      const origMetrics = VertexEditor.getMetrics(origName);
+      const optMetrics = VertexEditor.getMetrics(optName);
+      if (origMetrics && optMetrics) {
+        ComparisonChart.update(
+          origMetrics.segments, origFeature.geometry.coordinates,
+          optMetrics.segments, optFeature.geometry.coordinates
+        );
+        TabController.setTabEnabled('comparison', true);
+        return;
+      }
+    }
+    ComparisonChart.clear();
+    TabController.setTabEnabled('comparison', false);
   }
 
   // ==== Resize handle for bottom panel ====

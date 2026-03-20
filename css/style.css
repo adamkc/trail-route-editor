@@ -107,20 +107,61 @@ button.active { background: #e94560; border-color: #e94560; }
   flex-shrink: 0;
 }
 
-#stats-column {
-  width: 220px;
-  min-width: 180px;
-  flex-shrink: 0;
-  overflow-y: auto;
-  border-right: 1px solid #0f3460;
-}
-
 #charts-column {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
+}
+
+/* ---- Tab bar ---- */
+#tab-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid #0f3460;
+  flex-shrink: 0;
+  background: #16213e;
+}
+
+.tab-btn {
+  padding: 6px 14px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: #888;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.tab-btn:hover { color: #ccc; background: transparent; }
+.tab-btn.active { color: #e0e0e0; border-bottom-color: #e94560; background: transparent; }
+.tab-btn.disabled { opacity: 0.35; cursor: not-allowed; }
+.tab-btn.disabled:hover { color: #888; }
+
+/* ---- Tab panes ---- */
+.tab-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.tab-pane.hidden { display: none !important; }
+
+.chart-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 4px 10px;
+}
+.chart-panel canvas {
+  flex: 1;
+  min-height: 0;
 }
 
 #help-column {
@@ -199,53 +240,59 @@ button.active { background: #e94560; border-color: #e94560; }
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- Charts ---- */
-#elev-chart-panel, #slope-chart-panel {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
+/* ---- Charts (handled by .chart-panel now) ---- */
 
-#elev-chart-panel canvas,
-#slope-chart-panel canvas {
-  flex: 1;
-  min-height: 0;
-}
-
-/* ---- Segment table ---- */
-#segment-table-container {
-  max-height: 140px;
-  overflow-y: auto;
-}
-
-#segment-table {
+/* ---- Stats comparison table ---- */
+.stats-comparison-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 11px;
+  white-space: nowrap;
 }
 
-#segment-table thead {
+.stats-comparison-table thead {
   position: sticky;
   top: 0;
   background: #16213e;
+  z-index: 1;
 }
 
-#segment-table th {
-  padding: 4px 6px;
-  text-align: left;
+.stats-comparison-table th {
+  padding: 6px 10px;
+  text-align: right;
   color: #a0a0a0;
   font-weight: 500;
   border-bottom: 1px solid #0f3460;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
 }
 
-#segment-table td {
-  padding: 3px 6px;
-  border-bottom: 1px solid #1a1a2e;
+.stats-comparison-table td {
+  padding: 4px 10px;
+  text-align: right;
+  border-bottom: 1px solid rgba(15, 52, 96, 0.5);
+  font-variant-numeric: tabular-nums;
 }
 
-#segment-table tr:hover {
-  background: rgba(233, 69, 96, 0.15);
+.stats-comparison-table tr:hover {
+  background: rgba(233, 69, 96, 0.08);
+}
+
+.stats-metric-col {
+  text-align: left !important;
+  color: #888;
+  font-weight: 500;
+  min-width: 100px;
+  position: sticky;
+  left: 0;
+  background: #16213e;
+}
+
+.stats-selected-col {
+  color: #e94560 !important;
+  font-weight: 600;
+  background: rgba(233, 69, 96, 0.05);
 }
 
 .grade-cell {

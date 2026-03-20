@@ -72,6 +72,9 @@ const TrailMap = (() => {
 
     await new Promise(resolve => map.on('load', resolve));
 
+    // Scale bar
+    map.addControl(new maplibregl.ScaleControl({ maxWidth: 150, unit: 'metric' }), 'bottom-left');
+
     // Auto-recover from NaN/matrix errors (3D terrain + extreme zoom can corrupt the transform)
     let recovering = false;
     function recoverTransform() {
@@ -210,6 +213,26 @@ const TrailMap = (() => {
         'line-color': ['get', 'color'],
         'line-width': 4,
         'line-opacity': 1.0
+      }
+    });
+
+    // Drainage risk zones overlay
+    map.addSource('drainage-zones', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] }
+    });
+    map.addLayer({
+      id: 'drainage-zones-line',
+      type: 'line',
+      source: 'drainage-zones',
+      paint: {
+        'line-color': '#ff3300',
+        'line-width': 10,
+        'line-opacity': 0.7
+      },
+      layout: {
+        'line-cap': 'round',
+        'line-join': 'round'
       }
     });
 
@@ -500,6 +523,41 @@ const TrailMap = (() => {
     if (src) src.setData({ type: 'FeatureCollection', features: [] });
   }
 
+  function showDrainageZones(zones, coords) {
+    const src = map.getSource('drainage-zones');
+    if (!src || !coords || coords.length < 2) return;
+
+    const features = [];
+    for (const zone of zones) {
+      const lineCoords = [];
+      for (let i = zone.startIdx; i <= zone.endIdx + 1 && i < coords.length; i++) {
+        lineCoords.push(coords[i]);
+      }
+      if (lineCoords.length >= 2) {
+        features.push({
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: lineCoords },
+          properties: {
+            length: zone.length,
+            avgAngle: zone.avgAngle
+          }
+        });
+      }
+    }
+    src.setData({ type: 'FeatureCollection', features });
+
+    // Ensure drainage layer renders on top of trails and grade segments
+    const anchor = map.getLayer('vertex-circles') ? 'vertex-circles'
+                 : map.getLayer('hover-point-outer') ? 'hover-point-outer'
+                 : undefined;
+    if (map.getLayer('drainage-zones-line')) map.moveLayer('drainage-zones-line', anchor);
+  }
+
+  function clearDrainageZones() {
+    const src = map.getSource('drainage-zones');
+    if (src) src.setData({ type: 'FeatureCollection', features: [] });
+  }
+
   function addTrails(trailsGeoJson) {
     // Remove existing trail layers first
     removeLayers();
@@ -668,5 +726,5 @@ const TrailMap = (() => {
     }
   }
 
-  return { init, addTrails, removeLayers, updateTrailColors, showBasemap, fitToTrails, recenter, setHoverPoint, showGradeSegments, clearGradeSegments, showContours, enable3DTerrain, getMap, getTrailColor, getTrailColors, highlightTrail };
+  return { init, addTrails, removeLayers, updateTrailColors, showBasemap, fitToTrails, recenter, setHoverPoint, showGradeSegments, clearGradeSegments, showDrainageZones, clearDrainageZones, showContours, enable3DTerrain, getMap, getTrailColor, getTrailColors, highlightTrail };
 })();

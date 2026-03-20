@@ -30,20 +30,30 @@
       </select>
     </div>
     <div class="toolbar-group">
+      <label>Data:</label>
       <button id="btn-load-dem" title="Load a different DEM">Load DEM</button>
       <button id="btn-load-trails" title="Load trails from a project file">Load Trails</button>
     </div>
     <div class="toolbar-group">
+      <label>Route:</label>
       <button id="btn-new-route" title="Draw a new route by clicking on the map">New Route</button>
       <button id="btn-delete-route" title="Delete the currently selected route">Delete Route</button>
-      <button id="btn-optimize" title="Run spring-mass optimizer on selected trail">Optimize Route</button>
+      <button id="btn-waypoint" title="Place waypoint markers on the map">Add Waypoint</button>
     </div>
     <div class="toolbar-group">
+      <label>Processing:</label>
+      <button id="btn-densify" title="Add evenly-spaced vertices to selected trail">Densify</button>
+      <button id="btn-optimize" title="Run spring-mass optimizer on selected trail">Optimize</button>
+      <button id="btn-drainage" title="Analyze water drainage risk (fall-line alignment)">Drainage</button>
+    </div>
+    <div class="toolbar-group">
+      <label>Export:</label>
       <button id="btn-undo" title="Undo last vertex move">Undo</button>
-      <button id="btn-export" title="Export edited trails as GeoJSON">Export GeoJSON</button>
-      <button id="btn-export-kml" title="Export edited trails as KML">Export KML</button>
+      <button id="btn-export" title="Export edited trails as GeoJSON">GeoJSON</button>
+      <button id="btn-export-kml" title="Export edited trails as KML">KML</button>
     </div>
     <div class="toolbar-group">
+      <label>Base Map:</label>
       <button id="btn-hillshade" class="basemap-btn active">Hillshade</button>
       <button id="btn-satellite" class="basemap-btn">Satellite</button>
       <button id="btn-recenter" title="Reset map: flat view, fit to trails">Recenter</button>
@@ -184,81 +194,39 @@
     <!-- Bottom panel -->
     <div id="resize-handle"></div>
     <div id="bottom-panel">
-      <!-- Stats + segment table (narrow left column) -->
-      <div id="stats-column">
-        <div id="stats-panel" class="panel">
-          <h3>Trail Statistics</h3>
-          <div id="stats-grid">
-            <div class="stat-item">
-              <span class="stat-label">Length</span>
-              <span class="stat-value" id="stat-length">—</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-label">Elev Min</span>
-              <span class="stat-value" id="stat-elev-min">—</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-label">Elev Max</span>
-              <span class="stat-value" id="stat-elev-max">—</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-label">Gain</span>
-              <span class="stat-value" id="stat-gain">—</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-label">Loss</span>
-              <span class="stat-value" id="stat-loss">—</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-label">Avg Grade</span>
-              <span class="stat-value" id="stat-avg-grade">—</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-label">Max Grade</span>
-              <span class="stat-value" id="stat-max-grade">—</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-label">&gt;8%</span>
-              <span class="stat-value" id="stat-over8">—</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-label">&gt;12%</span>
-              <span class="stat-value" id="stat-over12">—</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-label">Reversals/100m</span>
-              <span class="stat-value" id="stat-reversals">—</span>
-            </div>
-          </div>
-        </div>
-        <div id="segment-table-panel" class="panel">
-          <h3>Segments</h3>
-          <div id="segment-table-container">
-            <table id="segment-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Dist (m)</th>
-                  <th>Elev (m)</th>
-                  <th>Grade %</th>
-                  <th>Dir</th>
-                </tr>
-              </thead>
-              <tbody id="segment-table-body"></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <!-- Charts (wide right area) -->
+      <!-- Charts column with tab bar -->
       <div id="charts-column">
-        <div id="elev-chart-panel" class="panel">
-          <h3>Elevation Profile</h3>
-          <canvas id="elev-chart"></canvas>
+        <div id="tab-bar">
+          <button class="tab-btn active" data-tab="elevation">Elevation</button>
+          <button class="tab-btn" data-tab="slope">Slope</button>
+          <button class="tab-btn disabled" data-tab="comparison">Comparison</button>
+          <button class="tab-btn" data-tab="stats">Statistics</button>
         </div>
-        <div id="slope-chart-panel" class="panel">
-          <h3>Slope Profile</h3>
-          <canvas id="slope-chart"></canvas>
+
+        <!-- Tab: Elevation Profile -->
+        <div id="tab-elevation" class="tab-pane">
+          <div id="elev-chart-panel" class="chart-panel">
+            <canvas id="elev-chart"></canvas>
+          </div>
+        </div>
+
+        <!-- Tab: Slope Profile -->
+        <div id="tab-slope" class="tab-pane hidden">
+          <div id="slope-chart-panel" class="chart-panel">
+            <canvas id="slope-chart"></canvas>
+          </div>
+        </div>
+
+        <!-- Tab: Elevation Comparison -->
+        <div id="tab-comparison" class="tab-pane hidden">
+          <div id="comparison-chart-panel" class="chart-panel">
+            <canvas id="comparison-chart"></canvas>
+          </div>
+        </div>
+
+        <!-- Tab: Trail Statistics (comparison table) -->
+        <div id="tab-stats" class="tab-pane hidden">
+          <div id="stats-panel" style="overflow:auto; flex:1; padding: 8px 10px;"></div>
         </div>
       </div>
 
@@ -268,23 +236,25 @@
           <h3>Controls</h3>
           <dl class="help-list">
             <dt>Drag vertex</dt>
-            <dd>Click &amp; drag a white dot to move it</dd>
+            <dd>Click &amp; drag a white dot</dd>
             <dt>Add vertex</dt>
-            <dd>Right-click on a trail line</dd>
+            <dd>Right-click on trail line</dd>
             <dt>Delete vertex</dt>
-            <dd>Right-click on an existing vertex</dd>
+            <dd>Right-click on vertex</dd>
             <dt>Freeze vertex</dt>
-            <dd>Shift+click a vertex (turns blue)</dd>
+            <dd>Shift+click vertex (blue)</dd>
             <dt>Freeze range</dt>
-            <dd>Ctrl+Shift+click vertex A, then Ctrl+Shift+click vertex B</dd>
+            <dd>Ctrl+Shift+click two vertices</dd>
+            <dt>Add waypoint</dt>
+            <dd>Click Add Waypoint, click map</dd>
+            <dt>Delete waypoint</dt>
+            <dd>Right-click a waypoint marker</dd>
             <dt>Tilt map (3D)</dt>
             <dd>Right-click + drag on map</dd>
-            <dt>Zoom to location</dt>
-            <dd>Click on elevation or slope chart</dd>
+            <dt>Zoom to point</dt>
+            <dd>Click on chart</dd>
             <dt>Undo</dt>
-            <dd>Ctrl+Z or Undo button</dd>
-            <dt>Optimize</dt>
-            <dd>Select a trail, then click Optimize Route</dd>
+            <dd>Ctrl+Z</dd>
           </dl>
         </div>
       </div>
@@ -310,6 +280,10 @@
   <script src="js/trail-metrics.js"></script>
   <script src="js/profile-charts.js"></script>
   <script src="js/stats-panel.js"></script>
+  <script src="js/tab-controller.js"></script>
+  <script src="js/comparison-chart.js"></script>
+  <script src="js/drainage-analysis.js"></script>
+  <script src="js/waypoints.js"></script>
   <script src="js/vertex-editor.js"></script>
   <script src="js/kml-utils.js"></script>
   <script src="js/draw-route.js"></script>
