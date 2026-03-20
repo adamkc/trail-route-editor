@@ -73,15 +73,41 @@ const TrailMap = (() => {
     await new Promise(resolve => map.on('load', resolve));
 
     // Auto-recover from NaN/matrix errors (3D terrain + extreme zoom can corrupt the transform)
+    let recovering = false;
+    function recoverTransform() {
+      if (recovering) return;
+      recovering = true;
+      console.warn('[map] Transform corrupted — auto-recovering');
+      try {
+        // Disable terrain temporarily to break the corruption cycle
+        map.setTerrain(null);
+        map.setPitch(0);
+        map.setBearing(0);
+        // Reset zoom/center if they're NaN
+        const z = map.getZoom();
+        const c = map.getCenter();
+        if (isNaN(z) || z < 1) map.setZoom(13);
+        if (isNaN(c.lng) || isNaN(c.lat)) {
+          map.setCenter([-121.5, 45.7]); // fallback center
+        }
+        // Re-enable terrain after a tick
+        setTimeout(() => {
+          try {
+            if (map.getSource('dem-terrain')) {
+              map.setTerrain({ source: 'dem-terrain', exaggeration: 1.5 });
+            }
+          } catch (e) { /* terrain may not be set up yet */ }
+          recovering = false;
+        }, 200);
+      } catch (e) {
+        recovering = false;
+      }
+    }
+
     map.on('error', (e) => {
       const msg = e.error ? e.error.message : '';
       if (msg.includes('Invalid LngLat') || msg.includes('invert matrix')) {
-        console.warn('[map] Transform corrupted — auto-recovering');
-        try {
-          map.setPitch(0);
-          map.setBearing(0);
-          map.setZoom(Math.max(map.getZoom(), 10));
-        } catch (ignored) { /* best effort */ }
+        recoverTransform();
       }
     });
 
@@ -89,11 +115,8 @@ const TrailMap = (() => {
     window.addEventListener('error', (e) => {
       const msg = e.message || '';
       if (msg.includes('Invalid LngLat') || msg.includes('invert matrix')) {
-        e.preventDefault(); // suppress console noise
-        try {
-          map.setPitch(0);
-          map.setBearing(0);
-        } catch (ignored) {}
+        e.preventDefault();
+        recoverTransform();
       }
     });
 
@@ -218,6 +241,9 @@ const TrailMap = (() => {
         'circle-stroke-width': 2
       }
     });
+
+    // Initialize draw-route preview layers
+    if (typeof DrawRoute !== 'undefined') DrawRoute.init(map);
 
     return map;
   }
@@ -609,5 +635,38 @@ const TrailMap = (() => {
   function getMap() { return map; }
   function getTrailColors() { return TRAIL_COLORS; }
 
-  return { init, addTrails, removeLayers, updateTrailColors, showBasemap, fitToTrails, recenter, setHoverPoint, showGradeSegments, clearGradeSegments, showContours, enable3DTerrain, getMap, getTrailColor, getTrailColors };
+  /**
+   * Dim non-selected trail lines when a specific trail is selected.
+   * When trailName is null or '__all__', restore full opacity on all trails.
+   */
+  function highlightTrail(trailName) {
+    if (!map.getLayer('trail-lines')) return;
+    if (!trailName || trailName === '__all__') {
+      // Show all trails at full opacity
+      map.setPaintProperty('trail-lines', 'line-opacity', 1.0);
+      map.setPaintProperty('trail-outline', 'line-opacity', 0.5);
+    } else {
+      // Selected trail full opacity, others dimmed
+      map.setPaintProperty('trail-lines', 'line-opacity', [
+        'case',
+        ['any',
+          ['==', ['get', 'Name'], trailName],
+          ['==', ['get', 'name'], trailName]
+        ],
+        1.0,
+        0.2  // dim non-selected trails
+      ]);
+      map.setPaintProperty('trail-outline', 'line-opacity', [
+        'case',
+        ['any',
+          ['==', ['get', 'Name'], trailName],
+          ['==', ['get', 'name'], trailName]
+        ],
+        0.5,
+        0.1
+      ]);
+    }
+  }
+
+  return { init, addTrails, removeLayers, updateTrailColors, showBasemap, fitToTrails, recenter, setHoverPoint, showGradeSegments, clearGradeSegments, showContours, enable3DTerrain, getMap, getTrailColor, getTrailColors, highlightTrail };
 })();

@@ -30,23 +30,147 @@
       </select>
     </div>
     <div class="toolbar-group">
-      <label>Basemap:</label>
-      <button id="btn-hillshade" class="basemap-btn active">Hillshade</button>
-      <button id="btn-satellite" class="basemap-btn">Satellite</button>
+      <button id="btn-load-dem" title="Load a different DEM">Load DEM</button>
+      <button id="btn-load-trails" title="Load trails from a project file">Load Trails</button>
     </div>
     <div class="toolbar-group">
-      <button id="btn-load-trails" title="Load trails from a project file">Load Trails</button>
-      <button id="btn-load-dem" title="Load a different DEM">Load DEM</button>
+      <button id="btn-new-route" title="Draw a new route by clicking on the map">New Route</button>
+      <button id="btn-delete-route" title="Delete the currently selected route">Delete Route</button>
+      <button id="btn-optimize" title="Run spring-mass optimizer on selected trail">Optimize Route</button>
     </div>
     <div class="toolbar-group">
       <button id="btn-undo" title="Undo last vertex move">Undo</button>
-      <button id="btn-export" title="Export edited trails as GeoJSON">Export</button>
+      <button id="btn-export" title="Export edited trails as GeoJSON">Export GeoJSON</button>
+      <button id="btn-export-kml" title="Export edited trails as KML">Export KML</button>
     </div>
     <div class="toolbar-group">
-      <button id="btn-optimize" title="Run spring-mass optimizer on selected trail">Optimize Route</button>
+      <button id="btn-hillshade" class="basemap-btn active">Hillshade</button>
+      <button id="btn-satellite" class="basemap-btn">Satellite</button>
       <button id="btn-recenter" title="Reset map: flat view, fit to trails">Recenter</button>
+      <button id="btn-guide" title="Quick use guide">Guide</button>
     </div>
     <div id="status-bar"></div>
+  </div>
+
+  <!-- Splash / Guide screen -->
+  <div id="splash-overlay" class="splash-overlay">
+    <div class="splash-modal">
+      <div class="splash-header">
+        <h1>Trail Route Editor</h1>
+        <p class="splash-subtitle">Design and optimize trail routes using real terrain data</p>
+      </div>
+      <div class="splash-body">
+
+        <div class="splash-section">
+          <h2>Getting Started</h2>
+          <div class="splash-steps">
+            <div class="splash-step">
+              <span class="splash-step-num">1</span>
+              <div>
+                <b>Load a DEM</b> &mdash; Click <em>Load DEM</em> and select a GeoTIFF elevation raster.
+                The app generates a hillshade, contour lines, and 3D terrain from this file.
+                Cropped DEMs covering just your project area work best.
+              </div>
+            </div>
+            <div class="splash-step">
+              <span class="splash-step-num">2</span>
+              <div>
+                <b>Load or draw trails</b> &mdash; Click <em>Load Trails</em> to import existing routes
+                (GeoJSON, KML, or GeoPackage with local server), or click <em>New Route</em> to draw
+                one from scratch by clicking on the map.
+              </div>
+            </div>
+            <div class="splash-step">
+              <span class="splash-step-num">3</span>
+              <div>
+                <b>Edit vertices</b> &mdash; Select a trail from the dropdown. Drag vertices to reshape.
+                Right-click a vertex to delete it. Click a segment midpoint to insert a new vertex.
+              </div>
+            </div>
+            <div class="splash-step">
+              <span class="splash-step-num">4</span>
+              <div>
+                <b>Optimize</b> &mdash; Click <em>Optimize Route</em> to run the spring-mass optimizer.
+                It reshapes the trail to meet a target grade while following the terrain.
+              </div>
+            </div>
+            <div class="splash-step">
+              <span class="splash-step-num">5</span>
+              <div>
+                <b>Export</b> &mdash; Download your edited trails as GeoJSON or KML.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="splash-section">
+          <h2>App Layout</h2>
+          <div class="splash-layout-desc">
+            <div class="splash-layout-item"><b>Top toolbar</b> &mdash; Trail selector, basemap toggle, load/export/draw/optimize buttons</div>
+            <div class="splash-layout-item"><b>Map</b> &mdash; Interactive map with hillshade, contours, and 3D terrain. Right-click drag to tilt.</div>
+            <div class="splash-layout-item"><b>Bottom panel</b> &mdash; Elevation profile, slope profile, and trail stats. Drag the top edge to resize. Click the charts to zoom the map to that location.</div>
+          </div>
+        </div>
+
+        <div class="splash-section">
+          <h2>Tips</h2>
+          <div class="splash-tips">
+            <div class="splash-tip">
+              <span class="splash-tip-icon">&#x1F3F7;</span>
+              <div><b>Trail naming matters</b> &mdash; Trails loaded with a <code>Name</code> or <code>name</code>
+              property get listed individually in the selector. Trails without names are auto-assigned
+              names like &ldquo;Trail 1&rdquo;.</div>
+            </div>
+            <div class="splash-tip">
+              <span class="splash-tip-icon">&#x2744;</span>
+              <div><b>Freeze vertices before optimizing</b> &mdash; Shift+click to freeze/unfreeze individual vertices (turns blue).
+              Ctrl+Shift+click two vertices to freeze the range between them. Use &ldquo;Freeze Flat&rdquo; in the
+              optimizer to auto-freeze segments already below 5% grade. Frozen vertices stay fixed during optimization.</div>
+            </div>
+            <div class="splash-tip">
+              <span class="splash-tip-icon">&#x1F4CB;</span>
+              <div><b>Optimizer creates a copy</b> &mdash; Running the optimizer adds a new trail called
+              &ldquo;[name] - Optimized&rdquo; so you can compare before and after side by side.</div>
+            </div>
+            <div class="splash-tip">
+              <span class="splash-tip-icon">&#x26A0;</span>
+              <div><b>Target Grade vs Max Segment Grade</b> &mdash; Target Grade sets the overall average.
+              Max Segment Grade is a hard cap on any individual segment. Set target to 7% and max to 15%
+              to allow some steepness while keeping the average reasonable.</div>
+            </div>
+            <div class="splash-tip">
+              <span class="splash-tip-icon">&#x1F3AF;</span>
+              <div><b>Recenter if the map gets stuck</b> &mdash; If zooming into 3D terrain makes the map
+              unresponsive, click &ldquo;Recenter&rdquo; to reset the view.</div>
+            </div>
+            <div class="splash-tip">
+              <span class="splash-tip-icon">&#x26A1;</span>
+              <div><b>Contours are cached</b> &mdash; First generation takes a few seconds. Subsequent loads
+              of the same DEM are instant.</div>
+            </div>
+            <div class="splash-tip">
+              <span class="splash-tip-icon">&#x2328;</span>
+              <div><b>Keyboard shortcuts</b> &mdash; <kbd>Ctrl+Z</kbd> undo vertex moves.
+              While drawing: <kbd>Ctrl+Z</kbd> removes last point, <kbd>Enter</kbd> finishes,
+              <kbd>Esc</kbd> cancels.</div>
+            </div>
+            <div class="splash-tip">
+              <span class="splash-tip-icon">&#x1F4E1;</span>
+              <div><b>Works offline</b> &mdash; Once loaded, everything runs in your browser. No data is sent
+              to any server. The local Python server is only needed for GeoPackage files and caching.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="splash-footer">
+        <label class="splash-checkbox">
+          <input type="checkbox" id="splash-dont-show">
+          Don't show this again
+        </label>
+        <button id="splash-close" class="opt-btn opt-btn-primary">Get Started</button>
+      </div>
+    </div>
   </div>
 
   <!-- Main content -->
@@ -152,7 +276,7 @@
             <dt>Freeze vertex</dt>
             <dd>Shift+click a vertex (turns blue)</dd>
             <dt>Freeze range</dt>
-            <dd>Shift+click vertex A, then shift+click vertex B</dd>
+            <dd>Ctrl+Shift+click vertex A, then Ctrl+Shift+click vertex B</dd>
             <dt>Tilt map (3D)</dt>
             <dd>Right-click + drag on map</dd>
             <dt>Zoom to location</dt>
@@ -187,6 +311,8 @@
   <script src="js/profile-charts.js"></script>
   <script src="js/stats-panel.js"></script>
   <script src="js/vertex-editor.js"></script>
+  <script src="js/kml-utils.js"></script>
+  <script src="js/draw-route.js"></script>
   <script src="js/export.js"></script>
   <script src="js/spring-mass.js"></script>
   <script src="js/optimizer-ui.js"></script>

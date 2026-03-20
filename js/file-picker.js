@@ -115,6 +115,21 @@ const FilePicker = (() => {
         html += '</div>';
       }
 
+      // KML files (convert to GeoJSON on load)
+      if (data.kml && data.kml.length > 0) {
+        html += '<div class="file-group"><div class="file-group-label">KML Files</div>';
+        for (const f of data.kml) {
+          html += `<div class="file-item" data-type="kml" data-path="${f.path}">
+            <div>
+              <div class="file-item-name">${f.name}</div>
+              <div class="file-item-dir">${f.dir}</div>
+            </div>
+            <div class="file-item-meta">${f.size_mb} MB</div>
+          </div>`;
+        }
+        html += '</div>';
+      }
+
       body().innerHTML = html;
 
       // Wire up click handlers
@@ -123,7 +138,21 @@ const FilePicker = (() => {
           const type = el.dataset.type;
           const path = el.dataset.path;
 
-          if (type === 'geojson') {
+          if (type === 'kml') {
+            // Fetch KML, convert to GeoJSON client-side, pass as direct data
+            try {
+              el.style.opacity = '0.5';
+              const resp = await fetch('/api/file?path=' + encodeURIComponent(path));
+              const text = await resp.text();
+              const geojson = KmlUtils.kmlToGeoJSON(text);
+              console.log(`[KML] Converted ${path}: ${geojson.features.length} features`);
+              close();
+              onSelect(null, null, null, geojson);
+            } catch (err) {
+              el.style.opacity = '1';
+              alert('Failed to load KML: ' + err.message);
+            }
+          } else if (type === 'geojson') {
             close();
             onSelect(null, path, null);
           } else if (type === 'gpkg') {
@@ -171,13 +200,14 @@ const FilePicker = (() => {
     open('Load Trails');
     body().innerHTML = `
       <div class="file-group">
-        <div class="file-group-label">Select a GeoJSON file from your computer</div>
+        <div class="file-group-label">Select a trail file from your computer</div>
         <p style="color: #999; font-size: 13px; margin: 8px 0 16px;">
-          GeoPackage (.gpkg) files require the local server. In browser mode, use GeoJSON files.
+          Supported formats: GeoJSON (.geojson, .json) and KML (.kml)<br>
+          GeoPackage (.gpkg) files require the local server.
         </p>
         <label class="file-upload-btn">
-          <input type="file" accept=".geojson,.json" id="browser-trail-input" style="display:none">
-          Choose GeoJSON File
+          <input type="file" accept=".geojson,.json,.kml" id="browser-trail-input" style="display:none">
+          Choose Trail File
         </label>
       </div>`;
 
@@ -188,12 +218,23 @@ const FilePicker = (() => {
       try {
         body().innerHTML = '<div class="loading-spinner">Reading ' + file.name + '...</div>';
         const text = await file.text();
-        const data = JSON.parse(text);
+        const ext = file.name.split('.').pop().toLowerCase();
+        let data;
+
+        if (ext === 'kml') {
+          data = KmlUtils.kmlToGeoJSON(text);
+          console.log(`[KML] Converted ${file.name}: ${data.features.length} features`);
+        } else {
+          data = JSON.parse(text);
+        }
+
         if (!data.features || !Array.isArray(data.features)) {
-          throw new Error('File is not a valid GeoJSON FeatureCollection');
+          throw new Error('File does not contain valid features');
+        }
+        if (data.features.length === 0) {
+          throw new Error('No features found in file');
         }
         close();
-        // Pass parsed GeoJSON as 4th arg
         onSelect(null, null, null, data);
       } catch (err) {
         body().innerHTML = '<div class="loading-spinner">Error: ' + err.message + '</div>';

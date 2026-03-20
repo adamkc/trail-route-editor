@@ -131,9 +131,32 @@ const ProfileCharts = (() => {
 
     // Slope profile
     const slopeCtx = document.getElementById('slope-chart').getContext('2d');
+    // Plugin to draw * on bars that exceed ±30%
+    const clippedBarPlugin = {
+      id: 'clippedBars',
+      afterDatasetsDraw(chart) {
+        const clipped = chart._clippedBars;
+        if (!clipped) return;
+        const meta = chart.getDatasetMeta(0);
+        const ctx = chart.ctx;
+        ctx.save();
+        ctx.font = 'bold 10px sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        for (let i = 0; i < clipped.length; i++) {
+          if (clipped[i] == null) continue;
+          const bar = meta.data[i];
+          if (!bar) continue;
+          const y = clipped[i] > 0 ? bar.y - 3 : bar.y + 10;
+          ctx.fillText('*', bar.x, y);
+        }
+        ctx.restore();
+      }
+    };
+
     slopeChart = new Chart(slopeCtx, {
       type: 'bar',
-      plugins: [crosshairPlugin],
+      plugins: [crosshairPlugin, clippedBarPlugin],
       data: {
         labels: [],
         datasets: [{
@@ -157,6 +180,8 @@ const ProfileCharts = (() => {
           },
           y: {
             ...chartDefaults.scales.y,
+            min: -30,
+            max: 30,
             title: { display: true, text: 'Grade (%)', color: '#888', font: { size: 10 } }
           }
         },
@@ -164,7 +189,14 @@ const ProfileCharts = (() => {
           ...chartDefaults.plugins,
           tooltip: {
             callbacks: {
-              label: (ctx) => `${ctx.parsed.y != null ? ctx.parsed.y.toFixed(1) : '?'}% grade`
+              // Show the REAL value in tooltip, not the clamped one
+              label: (ctx) => {
+                const chart = ctx.chart;
+                const realVal = chart._clippedBars && chart._clippedBars[ctx.dataIndex] != null
+                  ? chart._clippedBars[ctx.dataIndex]
+                  : ctx.parsed.y;
+                return `${realVal != null ? realVal.toFixed(1) : '?'}% grade`;
+              }
             }
           }
         }
@@ -222,10 +254,14 @@ const ProfileCharts = (() => {
     elevChart.data.datasets[0].data = elevData;
     elevChart.update('none');
 
-    // Slope profile
+    // Slope profile — clamp visual to ±30%, flag clipped bars
+    const SLOPE_CAP = 30;
     const slopeLabels = segments.map(s => Math.round(s.distStart));
-    const slopeData = segments.map(s => s.gradePct);
+    const rawSlope = segments.map(s => s.gradePct);
+    const slopeData = rawSlope.map(v => Math.max(-SLOPE_CAP, Math.min(SLOPE_CAP, v)));
     const slopeColors = segments.map(s => s.gradeClass.color);
+    // Track which bars are clipped so the plugin can annotate them
+    slopeChart._clippedBars = rawSlope.map((v, i) => Math.abs(v) > SLOPE_CAP ? rawSlope[i] : null);
     slopeChart.data.labels = slopeLabels;
     slopeChart.data.datasets[0].data = slopeData;
     slopeChart.data.datasets[0].backgroundColor = slopeColors;

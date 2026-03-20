@@ -66,7 +66,7 @@ Without GDAL, you can still load `.geojson` files directly.
 ### Freeze Vertices
 Freeze specific vertices so they stay fixed during optimization:
 - **Shift+click** a vertex to toggle freeze on/off (shown as blue circles)
-- **Shift+click two vertices** to freeze the entire range between them
+- **Ctrl+Shift+click two vertices** to freeze the entire range between them
 - **Freeze Flat button** — auto-freezes vertices on segments below a grade threshold (e.g., road sections)
 - **Clear Frozen button** — unfreeze all vertices on the selected trail
 
@@ -113,7 +113,7 @@ A quick-reference guide is shown in the bottom-right corner with all keyboard sh
 | Add vertex | Right-click on a trail segment |
 | Delete vertex | Right-click on a vertex |
 | Freeze/unfreeze vertex | Shift+click a vertex |
-| Freeze range | Shift+click vertex A, then Shift+click vertex B |
+| Freeze range | Ctrl+Shift+click vertex A, then Ctrl+Shift+click vertex B |
 | Undo | Ctrl+Z |
 | Redo | Ctrl+Y |
 | Zoom to chart location | Click on the elevation or slope graph |

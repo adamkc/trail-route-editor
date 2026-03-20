@@ -15,7 +15,8 @@ const SpringMass = (() => {
   // ── Default parameters (matching R grid-search winners) ──
   const DEFAULTS = {
     targetGrade:    0.07,
-    maxGrade:       0.25,   // hard cap: segments above this grade get extra correction
+    maxGrade:       0.20,   // used by Phase 2 grade redistribution
+    gradeWindow:    40,     // rolling window in meters for Phase 2
     vertexSpacing:  10,
     maxDrift:       200,
     stepSize:       0.3,
@@ -24,7 +25,6 @@ const SpringMass = (() => {
     wAttract:       2.0,
     wSmooth:        1.5,
     wRepel:         0.5,
-    wSlopeCap:      4.0,    // strength of slope-cap correction force
     minSeparation:  40,
     repelSkip:      3,
     repelRadius:    60,
@@ -139,8 +139,8 @@ const SpringMass = (() => {
   // ── Core iteration batch ──
 
   function runBatch(coords, coordsOrig, n, targetElev, raster, params, batchSize) {
-    const { stepSize, wElev, wAttract, wSmooth, wRepel, wSlopeCap,
-            minSeparation, repelSkip, repelRadius, maxDrift, maxGrade } = params;
+    const { stepSize, wElev, wAttract, wSmooth, wRepel,
+            minSeparation, repelSkip, repelRadius, maxDrift } = params;
     const idealLength = params._idealLength;
     const idealSpacing = params._idealSpacing;
     const frozen = params._frozenFlags;
@@ -163,7 +163,7 @@ const SpringMass = (() => {
         asp[j] = sampleAspectUTM(coords[j * 2], coords[j * 2 + 1]);
       }
 
-      // 1. Elevation force
+      // 1. Elevation force — push toward target elevation using DEM aspect
       for (let j = 1; j < n - 1; j++) {
         const err = elev[j] - targetElev[j];
         if (isNaN(err) || isNaN(asp[j])) continue;
@@ -219,50 +219,6 @@ const SpringMass = (() => {
           if (rmag > 5) { rfx = rfx / rmag * 5; rfy = rfy / rmag * 5; }
           force[j * 2]     += wRepel * rfx;
           force[j * 2 + 1] += wRepel * rfy;
-        }
-      }
-
-      // 5. Slope cap force — push vertices sideways when segment grade exceeds maxGrade
-      // Uses escalating strength: the more over the cap, the harder the push.
-      // Also scales up over iterations so early iterations focus on shape,
-      // later iterations enforce the cap more strictly.
-      if (wSlopeCap > 0 && maxGrade > 0) {
-        for (let j = 1; j < n - 1; j++) {
-          // Check both adjacent segments (j-1→j and j→j+1)
-          for (const [a, b] of [[j - 1, j], [j, j + 1]]) {
-            if (b >= n) continue;
-            const dx = coords[b * 2] - coords[a * 2];
-            const dy = coords[b * 2 + 1] - coords[a * 2 + 1];
-            const segLen = Math.sqrt(dx * dx + dy * dy);
-            if (segLen < 0.1) continue;
-            const dElev = Math.abs(elev[b] - elev[a]);
-            if (isNaN(dElev)) continue;
-            const grade = dElev / segLen;
-            if (grade <= maxGrade) continue;
-
-            // How far over the cap (ratio > 1 means over)
-            const overRatio = grade / maxGrade;
-            // Exponential penalty: stronger the further over the cap
-            const penalty = (overRatio - 1) * overRatio;
-
-            // Push vertex j perpendicular to the segment direction
-            const perpX = -dy / segLen;
-            const perpY =  dx / segLen;
-
-            // Use aspect to choose which perpendicular direction follows the contour
-            const asp = sampleAspectUTM(coords[j * 2], coords[j * 2 + 1]);
-            let sign = 1;
-            if (!isNaN(asp)) {
-              const contourX = Math.cos(asp);
-              const contourY = -Math.sin(asp);
-              const dot = perpX * contourX + perpY * contourY;
-              sign = dot >= 0 ? 1 : -1;
-            }
-
-            const strength = wSlopeCap * Math.min(penalty, 5.0);
-            force[j * 2]     += strength * sign * perpX;
-            force[j * 2 + 1] += strength * sign * perpY;
-          }
         }
       }
 
@@ -692,5 +648,264 @@ const SpringMass = (() => {
     };
   }
 
-  return { optimize, DEFAULTS, buildAspectGrid };
+  // ══════════════════════════════════════════════════════════════════
+  // Phase 2: Grade Redistribution
+  //
+  // After the spring-mass optimizer converges, this pass finds sections
+  // where the rolling-window average grade exceeds maxGrade and
+  // redistributes vertices within those sections so grade is uniform.
+  //
+  // This directly eliminates the up-down-up-down sawtooth pattern
+  // because all segments in a steep zone get the SAME grade.
+  // Short spikes at switchback turns are allowed (rolling window).
+  // ══════════════════════════════════════════════════════════════════
+
+  /**
+   * Phase 2: Smooth grades on an existing trail.
+   *
+   * @param {Array} wgs84Coords - Array of [lng, lat] coordinates
+   * @param {Array} elevations  - Parallel array of elevation values
+   * @param {Object} params     - { maxGrade, gradeWindow, passes }
+   * @param {Object} callbacks  - { onProgress, onFrame, shouldAbort }
+   * @returns {Promise<{coords, elevations, stats}>}
+   */
+  async function gradeRedistribute(wgs84Coords, elevations, params, callbacks) {
+    const maxGrade = params.maxGrade || 0.20;
+    const windowM = params.gradeWindow || 40;
+    const passes = params.gradePasses || 30;
+    const stepScale = params.gradeStepSize != null ? params.gradeStepSize : 0.4;
+    const maxLateralDrift = 15 * stepScale; // scale lateral drift with step size
+    const { onProgress, onFrame, shouldAbort } = callbacks || {};
+
+    const n = wgs84Coords.length;
+    if (n < 3) {
+      return { coords: wgs84Coords.map(c => [...c]), elevations: [...elevations], stats: {} };
+    }
+
+    // Convert to UTM for metric calculations
+    const utmCoords = wgs84Coords.map(c => Projection.wgs84ToUtm(c[0], c[1]));
+
+    // Working copy of UTM coords
+    const wx = utmCoords.map(c => c[0]);
+    const wy = utmCoords.map(c => c[1]);
+
+    // Cumulative distances (updated each pass)
+    const cumDist = new Float64Array(n);
+    function updateCumDist() {
+      cumDist[0] = 0;
+      for (let i = 1; i < n; i++) {
+        const dx = wx[i] - wx[i - 1];
+        const dy = wy[i] - wy[i - 1];
+        cumDist[i] = cumDist[i - 1] + Math.sqrt(dx * dx + dy * dy);
+      }
+    }
+    updateCumDist();
+
+    const raster = await DemSampler.getFullRaster();
+    if (raster) {
+      raster.pxX = raster.pixelSizeX;
+      raster.pxY = raster.pixelSizeY;
+    }
+
+    function getElev(i) {
+      if (raster) {
+        const e = sampleElevUTM(wx[i], wy[i], raster);
+        if (!isNaN(e)) return e;
+      }
+      return elevations[i];
+    }
+
+    function getElevAt(x, y) {
+      if (raster) {
+        const e = sampleElevUTM(x, y, raster);
+        if (!isNaN(e)) return e;
+      }
+      return NaN;
+    }
+
+    function segLen(i) {
+      const dx = wx[i + 1] - wx[i];
+      const dy = wy[i + 1] - wy[i];
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    // ── Main redistribution loop ──
+    let maxSeg = 0;
+    let steepCount = 0;
+
+    for (let pass = 0; pass < passes; pass++) {
+      if (shouldAbort && shouldAbort()) break;
+
+      // Identify problem vertices using BOTH per-segment and rolling-window checks
+      const isProblematic = new Uint8Array(n);
+
+      // Check 1: Per-segment grade — any segment exceeding maxGrade flags both endpoints
+      for (let j = 1; j < n; j++) {
+        const sl = segLen(j - 1);
+        if (sl < 0.1) continue;
+        const g = Math.abs(getElev(j) - getElev(j - 1)) / sl;
+        if (g > maxGrade) {
+          isProblematic[j - 1] = 1;
+          isProblematic[j] = 1;
+        }
+      }
+
+      // Check 2: Rolling-window average
+      for (let i = 1; i < n - 1; i++) {
+        let jStart = i, jEnd = i;
+        const halfWin = windowM / 2;
+        while (jStart > 0 && cumDist[i] - cumDist[jStart] < halfWin) jStart--;
+        while (jEnd < n - 1 && cumDist[jEnd] - cumDist[i] < halfWin) jEnd++;
+        const dist = Math.max(0.1, cumDist[jEnd] - cumDist[jStart]);
+        const dElev = Math.abs(getElev(jEnd) - getElev(jStart));
+        if (dElev / dist > maxGrade) isProblematic[i] = 1;
+      }
+
+      // Don't move endpoints
+      isProblematic[0] = 0;
+      isProblematic[n - 1] = 0;
+
+      // Build contiguous zones from problematic vertices
+      const zones = [];
+      let inZone = false, zoneStart = 0;
+      for (let i = 0; i < n; i++) {
+        if (isProblematic[i]) {
+          if (!inZone) { zoneStart = Math.max(0, i - 1); inZone = true; }
+        } else {
+          if (inZone) {
+            zones.push([zoneStart, Math.min(n - 1, i)]);
+            inZone = false;
+          }
+        }
+      }
+      if (inZone) zones.push([zoneStart, n - 1]);
+
+      steepCount = isProblematic.reduce((s, v) => s + v, 0);
+      if (steepCount === 0) {
+        console.log(`[Phase2] Pass ${pass + 1}: no vertices exceed ${(maxGrade * 100).toFixed(0)}% — done`);
+        break;
+      }
+
+      // For each zone, nudge interior vertices perpendicular to trail
+      // to find terrain at the target elevation (uniform grade within zone)
+      for (const [zs, ze] of zones) {
+        if (ze - zs < 2) continue;
+
+        const startElev = getElev(zs);
+        const endElev = getElev(ze);
+        const zoneDist = cumDist[ze] - cumDist[zs];
+        if (zoneDist < 0.1) continue;
+
+        for (let j = zs + 1; j < ze; j++) {
+          const frac = (cumDist[j] - cumDist[zs]) / zoneDist;
+          const targetE = startElev + frac * (endElev - startElev);
+          const curElev = getElev(j);
+          const elevErr = curElev - targetE;
+
+          if (Math.abs(elevErr) < 0.1) continue;
+
+          // Trail direction at this vertex
+          const tdx = wx[Math.min(j + 1, ze)] - wx[Math.max(j - 1, zs)];
+          const tdy = wy[Math.min(j + 1, ze)] - wy[Math.max(j - 1, zs)];
+          const td = Math.sqrt(tdx * tdx + tdy * tdy);
+          if (td < 0.1) continue;
+
+          // Perpendicular direction
+          const perpX = -tdy / td;
+          const perpY = tdx / td;
+
+          // Search perpendicular — cap at maxLateralDrift
+          let bestOff = 0, bestErr = Math.abs(elevErr);
+          for (const off of [1, -1, 2, -2, 4, -4, 7, -7, 10, -10, 15, -15]) {
+            if (Math.abs(off) > maxLateralDrift) continue;
+            const tx = wx[j] + off * perpX;
+            const ty = wy[j] + off * perpY;
+            const te = getElevAt(tx, ty);
+            if (!isNaN(te)) {
+              const err = Math.abs(te - targetE);
+              if (err < bestErr) {
+                bestErr = err;
+                bestOff = off;
+              }
+            }
+          }
+
+          if (bestOff !== 0) {
+            // Damped move: stepScale controls how far we go per pass
+            wx[j] += stepScale * bestOff * perpX;
+            wy[j] += stepScale * bestOff * perpY;
+          }
+        }
+      }
+
+      // Laplacian smoothing pass — pull each moved vertex toward its neighbors' midpoint
+      // This prevents the trail from developing kinks/detours from lateral moves
+      const smoothBlend = Math.min(0.3, stepScale * 0.75);
+      for (let j = 1; j < n - 1; j++) {
+        if (!isProblematic[j]) continue;
+        const mx = (wx[j - 1] + wx[j + 1]) / 2;
+        const my = (wy[j - 1] + wy[j + 1]) / 2;
+        wx[j] += smoothBlend * (mx - wx[j]);
+        wy[j] += smoothBlend * (my - wy[j]);
+      }
+
+      // Update cumulative distances
+      updateCumDist();
+
+      // Compute max segment grade for reporting
+      maxSeg = 0;
+      for (let j = 1; j < n; j++) {
+        const sl = segLen(j - 1);
+        if (sl < 0.1) continue;
+        const g = Math.abs(getElev(j) - getElev(j - 1)) / sl;
+        if (g > maxSeg) maxSeg = g;
+      }
+
+      if (onProgress) {
+        onProgress(pass + 1, passes, steepCount, maxSeg);
+      }
+
+      if (onFrame) {
+        const frameCoords = [];
+        for (let j = 0; j < n; j++) {
+          const [lng, lat] = Projection.utmToWgs84(wx[j], wy[j]);
+          frameCoords.push([lng, lat]);
+        }
+        onFrame(frameCoords);
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+
+    // Convert back to WGS84
+    const resultCoords = [];
+    const resultElevs = [];
+    for (let j = 0; j < n; j++) {
+      const [lng, lat] = Projection.utmToWgs84(wx[j], wy[j]);
+      resultCoords.push([lng, lat]);
+      resultElevs.push(getElev(j));
+    }
+
+    // Final stats
+    let finalMaxSeg = 0;
+    for (let j = 1; j < n; j++) {
+      const sl = segLen(j - 1);
+      if (sl < 0.1) continue;
+      const g = Math.abs(getElev(j) - getElev(j - 1)) / sl;
+      if (g > finalMaxSeg) finalMaxSeg = g;
+    }
+
+    return {
+      coords: resultCoords,
+      elevations: resultElevs,
+      stats: {
+        maxSegGrade: finalMaxSeg,
+        length: cumDist[n - 1],
+        steepVertices: steepCount,
+        totalElevChange: Math.abs(elevations[elevations.length - 1] - elevations[0])
+      }
+    };
+  }
+
+  return { optimize, gradeRedistribute, DEFAULTS, buildAspectGrid };
 })();

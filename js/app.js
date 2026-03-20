@@ -12,6 +12,33 @@
   let trailNames = [];
   let demLoaded = false;
 
+  // ---- Splash screen ----
+  const splashOverlay = document.getElementById('splash-overlay');
+  const splashClose = document.getElementById('splash-close');
+  const splashDontShow = document.getElementById('splash-dont-show');
+  const btnGuide = document.getElementById('btn-guide');
+
+  function showSplash() {
+    if (splashOverlay) splashOverlay.classList.remove('hidden');
+  }
+  function hideSplash() {
+    if (splashOverlay) splashOverlay.classList.add('hidden');
+    if (splashDontShow && splashDontShow.checked) {
+      try { localStorage.setItem('trail-editor-hide-splash', '1'); } catch (e) {}
+    }
+  }
+
+  // Show on load unless previously dismissed
+  if (splashOverlay) {
+    try {
+      if (localStorage.getItem('trail-editor-hide-splash') === '1') {
+        splashOverlay.classList.add('hidden');
+      }
+    } catch (e) { /* localStorage unavailable */ }
+  }
+  if (splashClose) splashClose.addEventListener('click', hideSplash);
+  if (btnGuide) btnGuide.addEventListener('click', showSplash);
+
   // ---- 1. Initialize map ----
   try {
     status('Initializing map...');
@@ -312,6 +339,7 @@
   selector.addEventListener('change', (e) => {
     const name = e.target.value;
     VertexEditor.selectTrail(name === '__all__' ? null : name);
+    TrailMap.highlightTrail(name);
     if (name === '__all__') {
       StatsPanel.clear();
       ProfileCharts.clear();
@@ -356,6 +384,11 @@
     status('Exported edited_trails.geojson');
   });
 
+  document.getElementById('btn-export-kml').addEventListener('click', () => {
+    Export.downloadKML(VertexEditor.getTrailData());
+    status('Exported edited_trails.kml');
+  });
+
   document.getElementById('btn-recenter').addEventListener('click', () => {
     TrailMap.recenter(trailData);
     status('Map recentered');
@@ -384,6 +417,102 @@
     OptimizerUI.show(name, coords, elevs, metrics);
   });
 
+  // ── New Route (draw mode) ──
+  document.getElementById('btn-new-route').addEventListener('click', () => {
+    if (DrawRoute.isActive()) {
+      DrawRoute.cancel();
+      status('Draw cancelled');
+      return;
+    }
+    const name = prompt('Enter a name for the new route:');
+    if (!name || !name.trim()) return;
+    const trimName = name.trim();
+
+    // Check for duplicate name
+    if (trailNames.includes(trimName)) {
+      status('A route with that name already exists');
+      return;
+    }
+
+    status('Click on map to add vertices. Double-click or Enter to finish. Esc to cancel.');
+    document.getElementById('btn-new-route').textContent = 'Cancel Draw';
+
+    const resetBtn = () => { document.getElementById('btn-new-route').textContent = 'New Route'; };
+
+    DrawRoute.start(trimName, async (routeName, coords) => {
+      resetBtn();
+
+      if (coords.length < 2) {
+        status('Route cancelled — need at least 2 points');
+        return;
+      }
+
+      // Add as a new trail feature
+      VertexEditor.addTrailFeature(routeName, coords);
+
+      // Update trailData reference
+      trailData = VertexEditor.getTrailData();
+
+      // Add to selector
+      if (!trailNames.includes(routeName)) {
+        trailNames.push(routeName);
+        const opt = document.createElement('option');
+        opt.value = routeName;
+        opt.textContent = routeName;
+        selector.appendChild(opt);
+      }
+
+      // Select the new trail
+      selector.value = routeName;
+      VertexEditor.selectTrail(routeName);
+      TrailMap.updateTrailColors(trailData);
+
+      // Load elevations if DEM available
+      if (DemSampler.isLoaded()) {
+        await VertexEditor.loadElevations(trailData);
+        showTrailData(routeName);
+      }
+
+      status(`Route "${routeName}" created with ${coords.length} vertices`);
+    }, () => {
+      resetBtn();
+      status('Draw cancelled');
+    });
+  });
+
+  // ── Delete Route ──
+  document.getElementById('btn-delete-route').addEventListener('click', () => {
+    const name = selector.value;
+    if (!name || name === '__all__') {
+      status('Select a specific trail to delete');
+      return;
+    }
+    if (!confirm(`Delete route "${name}"? This cannot be undone.`)) return;
+
+    // Remove from vertex editor + map
+    VertexEditor.removeTrailFeature(name);
+
+    // Remove from selector
+    const idx = trailNames.indexOf(name);
+    if (idx >= 0) trailNames.splice(idx, 1);
+    const optEl = Array.from(selector.options).find(o => o.value === name);
+    if (optEl) selector.removeChild(optEl);
+
+    // Update trailData reference
+    trailData = VertexEditor.getTrailData();
+
+    // Select "All Trails" or first remaining
+    selector.value = '__all__';
+    VertexEditor.selectTrail(null);
+    TrailMap.updateTrailColors(trailData);
+
+    // Clear charts
+    ProfileCharts.clear();
+    StatsPanel.clear();
+
+    status(`Route "${name}" deleted`);
+  });
+
   // Callback when optimizer finishes — add new trail to selector and select it
   window._onOptimizerDone = (newTrailName) => {
     if (!trailNames.includes(newTrailName)) {
@@ -395,6 +524,7 @@
     }
     selector.value = newTrailName;
     VertexEditor.selectTrail(newTrailName);
+    TrailMap.highlightTrail(newTrailName);
     showTrailData(newTrailName);
     // Update trail colors without tearing down layers (preserves vertex layer)
     TrailMap.updateTrailColors(VertexEditor.getTrailData());
@@ -402,6 +532,7 @@
 
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+      if (DrawRoute.isActive()) return; // draw mode handles its own undo
       e.preventDefault();
       VertexEditor.undo();
     }

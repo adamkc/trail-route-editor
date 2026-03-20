@@ -28,10 +28,13 @@ const VertexEditor = (() => {
     });
 
     // Vertex circles: small dots along trails
+    // Use a filter (not opacity) to hide non-visible vertices so they
+    // are excluded from queryRenderedFeatures and can't be accidentally grabbed
     map.addLayer({
       id: 'vertex-circles',
       type: 'circle',
       source: 'vertices',
+      filter: ['==', ['get', 'visible'], true],
       paint: {
         'circle-radius': [
           'case',
@@ -55,16 +58,8 @@ const VertexEditor = (() => {
           ['boolean', ['get', 'frozen'], false], 2,
           1.5
         ],
-        'circle-opacity': [
-          'case',
-          ['boolean', ['get', 'visible'], true], 1,
-          0
-        ],
-        'circle-stroke-opacity': [
-          'case',
-          ['boolean', ['get', 'visible'], true], 1,
-          0
-        ]
+        'circle-opacity': 1,
+        'circle-stroke-opacity': 1
       }
     });
 
@@ -102,7 +97,7 @@ const VertexEditor = (() => {
             vertexIndex: i,
             selected: false,
             frozen: frozenSet.has(i),
-            visible: selectedTrail === null || selectedTrail === '__all__' || selectedTrail === name
+            visible: selectedTrail != null && selectedTrail !== '__all__' && selectedTrail === name
           }
         });
       });
@@ -114,16 +109,35 @@ const VertexEditor = (() => {
     if (e.originalEvent.button !== 0) return; // left click only
 
     // Only grab visible vertices (skip hidden vertices from non-selected trails)
-    const feature = e.features.find(f => f.properties.visible);
-    if (!feature) return;
+    const visibleFeatures = e.features.filter(f => f.properties.visible);
+    if (visibleFeatures.length === 0) return;
+
+    // If a specific trail is selected, only grab vertices from that trail
+    // This prevents grabbing overlapping vertices from a different trail
+    let feature;
+    if (selectedTrail && selectedTrail !== '__all__') {
+      feature = visibleFeatures.find(f => f.properties.trailName === selectedTrail);
+      if (!feature) return; // clicked vertex belongs to a different trail
+    } else {
+      // "All Trails" mode: if multiple trails overlap at this point,
+      // don't allow dragging (ambiguous which trail to edit)
+      const uniqueTrails = new Set(visibleFeatures.map(f => f.properties.trailName));
+      if (uniqueTrails.size > 1) {
+        setStatus('Select a specific trail to edit overlapping vertices');
+        return;
+      }
+      feature = visibleFeatures[0];
+    }
 
     const trailName = feature.properties.trailName;
     const vertexIndex = feature.properties.vertexIndex;
 
-    // Shift+click: toggle freeze / range-freeze
+    // Shift+click: toggle individual freeze
+    // Ctrl+Shift+click: range freeze (click two endpoints)
     if (e.originalEvent.shiftKey) {
       e.preventDefault();
-      handleFreezeClick(trailName, vertexIndex);
+      const useRange = e.originalEvent.ctrlKey || e.originalEvent.metaKey;
+      handleFreezeClick(trailName, vertexIndex, useRange);
       return;
     }
 
@@ -155,45 +169,66 @@ const VertexEditor = (() => {
 
     map.on('mousemove', onDrag);
     map.once('mouseup', onDragEnd);
+    // Safety net: if mouseup fires outside the map canvas (e.g. dragged off edge),
+    // still end the drag so trail lines and grade colors update
+    window.addEventListener('mouseup', onDragEndSafety, { once: true });
+  }
+
+  function onDragEndSafety() {
+    // Only fire if dragState is still active (map's mouseup didn't catch it)
+    if (dragState) {
+      onDragEnd();
+    }
   }
 
   /**
-   * Handle shift+click freeze toggling.
-   * First shift+click: toggle one vertex and set it as range start.
-   * Second shift+click on same trail: freeze/unfreeze the entire range between them.
+   * Handle freeze toggling.
+   * Shift+click: toggle one vertex frozen/unfrozen.
+   * Ctrl+Shift+click: range mode — first click sets start, second freezes/unfreezes the range.
    */
-  function handleFreezeClick(trailName, vertexIndex) {
+  function handleFreezeClick(trailName, vertexIndex, useRange) {
     if (!frozenSets[trailName]) frozenSets[trailName] = new Set();
     const frozenSet = frozenSets[trailName];
 
-    // If we have a pending range start on the same trail, freeze the range
-    if (freezeRangeStart && freezeRangeStart.trailName === trailName &&
-        freezeRangeStart.vertexIndex !== vertexIndex) {
-      const lo = Math.min(freezeRangeStart.vertexIndex, vertexIndex);
-      const hi = Math.max(freezeRangeStart.vertexIndex, vertexIndex);
+    if (useRange) {
+      // Ctrl+Shift+click: range freeze mode
+      if (freezeRangeStart && freezeRangeStart.trailName === trailName &&
+          freezeRangeStart.vertexIndex !== vertexIndex) {
+        // Second click: freeze/unfreeze the range
+        const lo = Math.min(freezeRangeStart.vertexIndex, vertexIndex);
+        const hi = Math.max(freezeRangeStart.vertexIndex, vertexIndex);
+        const shouldFreeze = frozenSet.has(freezeRangeStart.vertexIndex);
 
-      // Determine whether to freeze or unfreeze the range
-      // If the start vertex was frozen (we just froze it), freeze the range; otherwise unfreeze
-      const shouldFreeze = frozenSet.has(freezeRangeStart.vertexIndex);
+        for (let i = lo; i <= hi; i++) {
+          if (shouldFreeze) frozenSet.add(i);
+          else frozenSet.delete(i);
+        }
 
-      for (let i = lo; i <= hi; i++) {
-        if (shouldFreeze) frozenSet.add(i);
-        else frozenSet.delete(i);
+        const action = shouldFreeze ? 'Froze' : 'Unfroze';
+        setStatus(`${action} vertices ${lo}–${hi} on ${trailName} (${hi - lo + 1} vertices)`);
+        freezeRangeStart = null;
+      } else {
+        // First click: toggle this vertex and set as range start
+        if (frozenSet.has(vertexIndex)) {
+          frozenSet.delete(vertexIndex);
+          setStatus(`Unfroze vertex ${vertexIndex} — Ctrl+Shift+click another to unfreeze range`);
+        } else {
+          frozenSet.add(vertexIndex);
+          setStatus(`Froze vertex ${vertexIndex} — Ctrl+Shift+click another to freeze range`);
+        }
+        freezeRangeStart = { trailName, vertexIndex };
       }
-
-      const action = shouldFreeze ? 'Froze' : 'Unfroze';
-      setStatus(`${action} vertices ${lo}–${hi} on ${trailName} (${hi - lo + 1} vertices)`);
-      freezeRangeStart = null;
     } else {
-      // First click: toggle this vertex and set as range start
+      // Plain Shift+click: toggle individual vertex only
       if (frozenSet.has(vertexIndex)) {
         frozenSet.delete(vertexIndex);
-        setStatus(`Unfroze vertex ${vertexIndex} — shift+click another to unfreeze range`);
+        setStatus(`Unfroze vertex ${vertexIndex}`);
       } else {
         frozenSet.add(vertexIndex);
-        setStatus(`Froze vertex ${vertexIndex} — shift+click another to freeze range`);
+        setStatus(`Froze vertex ${vertexIndex}`);
       }
-      freezeRangeStart = { trailName, vertexIndex };
+      // Clear any pending range start
+      freezeRangeStart = null;
     }
 
     // Refresh vertex display
@@ -241,8 +276,9 @@ const VertexEditor = (() => {
       trailElevations[trailName][vertexIndex] = elev;
     }
 
-    // Recompute metrics
+    // Recompute metrics and refresh map display
     recomputeTrail(trailName);
+    refreshMapSources();
 
     setStatus(`Moved vertex ${vertexIndex} — elev: ${elev != null ? elev.toFixed(1) + 'm' : 'N/A'}`);
   }
@@ -629,12 +665,17 @@ const VertexEditor = (() => {
     if (el) el.textContent = msg;
   }
 
+  function getTrailFeature(name) {
+    return findTrail(name);
+  }
+
   return {
     init, loadElevations, selectTrail, undo,
     getTrailData, getMetrics, getAllMetrics, getElevations,
     recomputeTrail, refreshMapSources,
     setTrailCoords, setTrailCoordsLive,
     addTrailFeature, removeTrailFeature,
+    getTrailFeature,
     getFrozenArray, freezeByGrade, clearFrozen, getFrozenCount
   };
 })();
