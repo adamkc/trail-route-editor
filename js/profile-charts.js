@@ -8,6 +8,38 @@ const ProfileCharts = (() => {
   let currentCoords = [];    // [lng, lat] for each vertex in the active trail
   let onHoverCallback = null; // (lngLat) => void, or null to clear
   let onClickCallback = null; // (lngLat) => void
+  let drainageZones = [];     // [{ startDist, endDist }] for drawing on charts
+
+  // Chart.js plugin to draw drainage zone rectangles behind data
+  const drainagePlugin = {
+    id: 'drainageZones',
+    beforeDatasetsDraw(chart) {
+      if (!drainageZones || drainageZones.length === 0) return;
+      const { ctx, chartArea, scales: { x: xScale } } = chart;
+      if (!xScale) return;
+      ctx.save();
+      ctx.fillStyle = 'rgba(0, 31, 92, 0.18)'; // navy, semi-transparent
+      for (const zone of drainageZones) {
+        const xStart = xScale.getPixelForValue(zone.startDist);
+        const xEnd = xScale.getPixelForValue(zone.endDist);
+        const left = Math.max(xStart, chartArea.left);
+        const right = Math.min(xEnd, chartArea.right);
+        if (right > left) {
+          ctx.fillRect(left, chartArea.top, right - left, chartArea.bottom - chartArea.top);
+          // Draw navy border lines at zone edges
+          ctx.strokeStyle = 'rgba(0, 31, 92, 0.5)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(left, chartArea.top);
+          ctx.lineTo(left, chartArea.bottom);
+          ctx.moveTo(right, chartArea.top);
+          ctx.lineTo(right, chartArea.bottom);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+  };
 
   const chartDefaults = {
     responsive: true,
@@ -84,7 +116,7 @@ const ProfileCharts = (() => {
     const elevCtx = document.getElementById('elev-chart').getContext('2d');
     elevChart = new Chart(elevCtx, {
       type: 'scatter',
-      plugins: [crosshairPlugin],
+      plugins: [crosshairPlugin, drainagePlugin],
       data: {
         datasets: [{
           data: [],
@@ -155,7 +187,7 @@ const ProfileCharts = (() => {
 
     slopeChart = new Chart(slopeCtx, {
       type: 'bar',
-      plugins: [crosshairPlugin, clippedBarPlugin],
+      plugins: [crosshairPlugin, clippedBarPlugin, drainagePlugin],
       data: {
         labels: [],
         datasets: [{
@@ -315,5 +347,17 @@ const ProfileCharts = (() => {
     return { segments: currentSegments, coords: currentCoords };
   }
 
-  return { init, update, clear, resize, getLastData };
+  function setDrainageZones(zones) {
+    drainageZones = zones || [];
+    if (elevChart) elevChart.update('none');
+    if (slopeChart) slopeChart.update('none');
+  }
+
+  function clearDrainageZones() {
+    drainageZones = [];
+    if (elevChart) elevChart.update('none');
+    if (slopeChart) slopeChart.update('none');
+  }
+
+  return { init, update, clear, resize, getLastData, setDrainageZones, clearDrainageZones };
 })();

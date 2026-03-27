@@ -375,6 +375,7 @@
     // Clear drainage when switching trails
     if (drainageActive) {
       TrailMap.clearDrainageZones();
+      ProfileCharts.clearDrainageZones();
       drainageActive = false;
       document.getElementById('btn-drainage').classList.remove('active');
     }
@@ -489,6 +490,7 @@
     const btnDrainage = document.getElementById('btn-drainage');
     if (drainageActive) {
       TrailMap.clearDrainageZones();
+      ProfileCharts.clearDrainageZones();
       drainageActive = false;
       btnDrainage.classList.remove('active');
       status('Drainage analysis cleared');
@@ -510,6 +512,7 @@
     status('Analyzing drainage...');
     const zones = await DrainageAnalysis.analyze(coords);
     TrailMap.showDrainageZones(zones, coords);
+    ProfileCharts.setDrainageZones(zones);
     drainageActive = true;
     btnDrainage.classList.add('active');
     const totalLen = zones.reduce((s, z) => s + z.length, 0);

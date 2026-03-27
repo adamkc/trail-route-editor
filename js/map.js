@@ -226,9 +226,9 @@ const TrailMap = (() => {
       type: 'line',
       source: 'drainage-zones',
       paint: {
-        'line-color': '#ff3300',
-        'line-width': 10,
-        'line-opacity': 0.7
+        'line-color': '#001f5c',
+        'line-width': 8,
+        'line-opacity': 0.85
       },
       layout: {
         'line-cap': 'round',
