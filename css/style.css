@@ -904,3 +904,66 @@ button.active { background: #e94560; border-color: #e94560; }
   cursor: pointer;
 }
 .splash-checkbox input { accent-color: #e94560; }
+
+/* ---- Preprocess Panel ---- */
+.preprocess-panel {
+  background: #16213e;
+  border-bottom: 1px solid #0f3460;
+  padding: 12px 20px;
+  flex-shrink: 0;
+  z-index: 9;
+}
+.preprocess-panel.hidden { display: none; }
+
+.preprocess-header h3 {
+  font-size: 14px;
+  color: #e94560;
+  margin-bottom: 4px;
+}
+.preprocess-header p {
+  font-size: 12px;
+  color: #a0a0a0;
+  margin-bottom: 10px;
+}
+
+.preprocess-steps {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+.preprocess-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #c0c0c0;
+}
+.step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #0f3460;
+  color: #e0e0e0;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.step-status {
+  color: #4488ff;
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+.preprocess-progress {
+  margin-bottom: 10px;
+}
+.preprocess-progress.hidden { display: none; }
+
+.preprocess-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}

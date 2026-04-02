@@ -85,7 +85,9 @@ const Waypoints = (() => {
       if (!label) return; // cancelled
 
       let elevation = null;
-      if (typeof DemSampler !== 'undefined' && DemSampler.isLoaded()) {
+      if (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded()) {
+        elevation = RoiSampler.sampleAtLngLat(lngLat[0], lngLat[1]);
+      } else if (typeof DemSampler !== 'undefined' && DemSampler.isLoaded()) {
         elevation = await DemSampler.sampleAtLngLat(lngLat[0], lngLat[1]);
       }
 

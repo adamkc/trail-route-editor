@@ -283,7 +283,10 @@ const TrailMap = (() => {
     }
     try { maplibregl.removeProtocol('dem'); } catch (e) { /* first time */ }
 
-    const raster = await DemSampler.getFullRaster();
+    // Use ROI raster if available (smaller), fall back to full DEM
+    let raster = (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded())
+      ? RoiSampler.getFullRaster()
+      : await DemSampler.getFullRaster();
     if (!raster) { console.warn('[3D] No DEM loaded'); return; }
 
     const { data, width, height, originX, originY, pixelSizeX, pixelSizeY } = raster;
@@ -690,6 +693,224 @@ const TrailMap = (() => {
     if (srcMajor && major) srcMajor.setData({ type: 'FeatureCollection', features: [major] });
   }
 
+  // ── Tiled contour system (for preprocessed DEMs) ──
+
+  let _tiledContourDemId = null;
+  let _vectorContourDebounce = null;
+
+  /**
+   * Set up tiled contour layers from cached vector tiles.
+   * Zoomed out: just hillshade, no contours.
+   * Zoomed in (14+): vector contours fade in from cached tiles.
+   */
+  async function enableTiledContours(demId) {
+    _tiledContourDemId = demId;
+
+    // Vector contours only appear when zoomed in — hillshade handles overview
+    if (map.getLayer('contours-minor-line')) {
+      map.setPaintProperty('contours-minor-line', 'line-opacity', [
+        'interpolate', ['linear'], ['zoom'], 14.5, 0, 15, 0.18
+      ]);
+    }
+    if (map.getLayer('contours-major-line')) {
+      map.setPaintProperty('contours-major-line', 'line-opacity', [
+        'interpolate', ['linear'], ['zoom'], 14.5, 0, 15, 0.40
+      ]);
+    }
+
+    // Load vector tiles for current viewport
+    map.on('moveend', () => loadVectorContoursForViewport());
+    map.on('zoomend', () => loadVectorContoursForViewport());
+    loadVectorContoursForViewport();
+  }
+
+  async function loadVectorContoursForViewport() {
+    if (!_tiledContourDemId) return;
+    if (map.getZoom() < 14.5) return; // only load vector tiles when zoomed well in
+
+    // Debounce to avoid rapid-fire loads during panning
+    clearTimeout(_vectorContourDebounce);
+    _vectorContourDebounce = setTimeout(async () => {
+      const bounds = map.getBounds();
+      const z = 13; // vector tiles stored at zoom 13
+      const tiles = DemPreprocessor.getTilesForBounds({
+        west: bounds.getWest(),
+        south: bounds.getSouth(),
+        east: bounds.getEast(),
+        north: bounds.getNorth()
+      }, z);
+
+      const allMinor = [];
+      const allMajor = [];
+      for (const tile of tiles) {
+        const key = `${_tiledContourDemId}/${tile.z}/${tile.x}/${tile.y}`;
+        const stored = await CacheStore.getTile('vector-tiles', key);
+        if (!stored) continue;
+        try {
+          const geojson = JSON.parse(stored);
+          for (const f of geojson.features) {
+            if (f.properties.class === 'minor') allMinor.push(f);
+            else if (f.properties.class === 'major') allMajor.push(f);
+          }
+        } catch (e) {}
+      }
+
+      const srcMinor = map.getSource('contours-minor');
+      const srcMajor = map.getSource('contours-major');
+      if (srcMinor) srcMinor.setData({ type: 'FeatureCollection', features: allMinor });
+      if (srcMajor) srcMajor.setData({ type: 'FeatureCollection', features: allMajor });
+    }, 200);
+  }
+
+  /**
+   * Enable 3D terrain from cached tiles instead of in-memory raster.
+   */
+  async function enable3DTerrainFromCache(demId, exaggeration) {
+    exaggeration = exaggeration || 1.5;
+
+    if (map.getSource('dem-terrain')) {
+      map.setTerrain(null);
+      map.removeSource('dem-terrain');
+    }
+    try { maplibregl.removeProtocol('dem'); } catch (e) {}
+
+    const terrainTileCache = new Map();
+
+    maplibregl.addProtocol('dem', async (params) => {
+      const key = params.url.replace('dem://', '');
+      const cacheKey = demId + '/' + key;
+      if (terrainTileCache.has(cacheKey)) {
+        return { data: terrainTileCache.get(cacheKey) };
+      }
+      const data = await CacheStore.getTile('terrain-tiles', cacheKey);
+      if (data) {
+        terrainTileCache.set(cacheKey, data);
+        return { data };
+      }
+      return { data: FLAT_TERRAIN_PNG };
+    });
+
+    // Get bounds from cached metadata
+    const meta = await CacheStore.getMetadata(demId);
+    const demBounds = meta ? (meta.demExtent || meta.roiBounds) : null;
+
+    const sourceOpts = {
+      type: 'raster-dem',
+      tiles: ['dem://{z}/{x}/{y}'],
+      tileSize: 256,
+      encoding: 'terrarium',
+      minzoom: 10,
+      maxzoom: 14
+    };
+    if (demBounds) {
+      sourceOpts.bounds = [demBounds.west, demBounds.south, demBounds.east, demBounds.north];
+    }
+
+    map.addSource('dem-terrain', sourceOpts);
+
+    // Hillshade setup (same as enable3DTerrain)
+    if (map.getLayer('hillshade-layer')) map.removeLayer('hillshade-layer');
+    if (map.getSource('hillshade')) map.removeSource('hillshade');
+    if (map.getLayer('native-hillshade')) map.removeLayer('native-hillshade');
+    if (map.getLayer('hillshade-base')) map.removeLayer('hillshade-base');
+    if (map.getSource('hillshade-base-src')) map.removeSource('hillshade-base-src');
+    if (map.getSource('dem-hillshade')) map.removeSource('dem-hillshade');
+
+    map.addSource('dem-hillshade', { ...sourceOpts });
+
+    if (demBounds) {
+      map.addSource('hillshade-base-src', {
+        type: 'geojson',
+        data: {
+          type: 'Feature',
+          geometry: {
+            type: 'Polygon',
+            coordinates: [[
+              [demBounds.west, demBounds.south], [demBounds.east, demBounds.south],
+              [demBounds.east, demBounds.north], [demBounds.west, demBounds.north],
+              [demBounds.west, demBounds.south]
+            ]]
+          }
+        }
+      });
+
+      const insertBefore = map.getLayer('contours-minor-line') ? 'contours-minor-line'
+                         : map.getLayer('contours-raster-layer') ? 'contours-raster-layer'
+                         : map.getLayer('trail-outline') ? 'trail-outline'
+                         : undefined;
+
+      map.addLayer({
+        id: 'hillshade-base',
+        type: 'fill',
+        source: 'hillshade-base-src',
+        paint: { 'fill-color': '#f0f0f0' }
+      }, insertBefore);
+
+      map.addLayer({
+        id: 'native-hillshade',
+        type: 'hillshade',
+        source: 'dem-hillshade',
+        paint: {
+          'hillshade-exaggeration': 0.5,
+          'hillshade-shadow-color': '#2a2a2a',
+          'hillshade-highlight-color': '#ffffff',
+          'hillshade-accent-color': '#505050',
+          'hillshade-illumination-direction': 315,
+          'hillshade-illumination-anchor': 'viewport'
+        }
+      }, insertBefore);
+    }
+
+    map.setTerrain({ source: 'dem-terrain', exaggeration });
+    console.log('[3D] Terrain enabled from cache with exaggeration:', exaggeration);
+  }
+
+  /**
+   * Show the DEM extent as a dashed rectangle during preprocessing.
+   */
+  function showDemExtent(geojson) {
+    if (map.getSource('dem-extent')) {
+      map.getSource('dem-extent').setData(geojson);
+      return;
+    }
+    map.addSource('dem-extent', { type: 'geojson', data: geojson });
+    map.addLayer({
+      id: 'dem-extent-line',
+      type: 'line',
+      source: 'dem-extent',
+      paint: {
+        'line-color': '#4488ff',
+        'line-width': 2,
+        'line-dasharray': [4, 4],
+        'line-opacity': 0.7
+      }
+    });
+  }
+
+  function clearDemExtent() {
+    if (map.getLayer('dem-extent-line')) map.removeLayer('dem-extent-line');
+    if (map.getSource('dem-extent')) map.removeSource('dem-extent');
+  }
+
+  // Minimal transparent 1x1 PNG for missing tiles
+  const TRANSPARENT_PNG = (() => {
+    const arr = new Uint8Array([
+      0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A, // PNG header
+      0x00,0x00,0x00,0x0D,0x49,0x48,0x44,0x52,
+      0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x01,
+      0x08,0x06,0x00,0x00,0x00,0x1F,0x15,0xC4,
+      0x89,0x00,0x00,0x00,0x0A,0x49,0x44,0x41,
+      0x54,0x78,0x9C,0x62,0x00,0x00,0x00,0x02,
+      0x00,0x01,0xE5,0x27,0xDE,0xFC,0x00,0x00,
+      0x00,0x00,0x49,0x45,0x4E,0x44,0xAE,0x42,
+      0x60,0x82
+    ]);
+    return arr.buffer;
+  })();
+
+  // Flat terrain PNG (elevation 0 in Terrarium encoding)
+  const FLAT_TERRAIN_PNG = TRANSPARENT_PNG; // will be treated as 0 elev by MapLibre
+
   function getMap() { return map; }
   function getTrailColors() { return TRAIL_COLORS; }
 
@@ -726,5 +947,5 @@ const TrailMap = (() => {
     }
   }
 
-  return { init, addTrails, removeLayers, updateTrailColors, showBasemap, fitToTrails, recenter, setHoverPoint, showGradeSegments, clearGradeSegments, showDrainageZones, clearDrainageZones, showContours, enable3DTerrain, getMap, getTrailColor, getTrailColors, highlightTrail };
+  return { init, addTrails, removeLayers, updateTrailColors, showBasemap, fitToTrails, recenter, setHoverPoint, showGradeSegments, clearGradeSegments, showDrainageZones, clearDrainageZones, showContours, enable3DTerrain, enable3DTerrainFromCache, enableTiledContours, showDemExtent, clearDemExtent, getMap, getTrailColor, getTrailColors, highlightTrail };
 })();

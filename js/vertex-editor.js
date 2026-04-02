@@ -13,14 +13,25 @@ const VertexEditor = (() => {
   let onTrailUpdate = null;   // Callback when a trail is updated
   let frozenSets = {};        // { trailName: Set<vertexIndex> }
   let freezeRangeStart = null; // { trailName, vertexIndex } for shift+click range freeze
+  let handlersRegistered = false; // prevent duplicate event handlers
 
   function init(mapInstance, trails, callback) {
     map = mapInstance;
     trailData = trails;
     onTrailUpdate = callback;
 
+    // Reset elevation/metrics caches for fresh sampling
+    trailElevations = {};
+    trailMetrics = {};
+
     // Add vertex point source and layer
     vertexData = extractVertices(trailData);
+
+    // If source already exists, just update the data (no need to re-create layers)
+    if (map.getSource('vertices')) {
+      map.getSource('vertices').setData(vertexData);
+      return;
+    }
 
     map.addSource('vertices', {
       type: 'geojson',
@@ -67,19 +78,23 @@ const VertexEditor = (() => {
     if (map.getLayer('hover-point-outer')) map.moveLayer('hover-point-outer');
     if (map.getLayer('hover-point-inner')) map.moveLayer('hover-point-inner');
 
-    // Interaction handlers
-    map.on('mouseenter', 'vertex-circles', (e) => {
-      const hasVisible = e.features && e.features.some(f => f.properties.visible);
-      if (hasVisible) map.getCanvas().style.cursor = 'grab';
-    });
-    map.on('mouseleave', 'vertex-circles', () => {
-      if (!dragState) map.getCanvas().style.cursor = '';
-    });
+    // Only register event handlers once (they reference the module-level callbacks)
+    if (!handlersRegistered) {
+      handlersRegistered = true;
 
-    map.on('mousedown', 'vertex-circles', onMouseDown);
+      map.on('mouseenter', 'vertex-circles', (e) => {
+        const hasVisible = e.features && e.features.some(f => f.properties.visible);
+        if (hasVisible) map.getCanvas().style.cursor = 'grab';
+      });
+      map.on('mouseleave', 'vertex-circles', () => {
+        if (!dragState) map.getCanvas().style.cursor = '';
+      });
 
-    // Right-click: delete vertex or add vertex on segment
-    map.on('contextmenu', onRightClick);
+      map.on('mousedown', 'vertex-circles', onMouseDown);
+
+      // Right-click: delete vertex or add vertex on segment
+      map.on('contextmenu', onRightClick);
+    }
   }
 
   function extractVertices(trailsGeoJson) {
@@ -270,7 +285,9 @@ const VertexEditor = (() => {
     if (!trail) return;
 
     const coord = trail.geometry.coordinates[vertexIndex];
-    const elev = await DemSampler.sampleAtLngLat(coord[0], coord[1]);
+    const elev = (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded())
+      ? RoiSampler.sampleAtLngLat(coord[0], coord[1])
+      : await DemSampler.sampleAtLngLat(coord[0], coord[1]);
 
     if (trailElevations[trailName]) {
       trailElevations[trailName][vertexIndex] = elev;
@@ -356,7 +373,9 @@ const VertexEditor = (() => {
     trail.geometry.coordinates.splice(insertIndex, 0, [lngLat[0], lngLat[1]]);
 
     // Sample elevation
-    const elev = await DemSampler.sampleAtLngLat(lngLat[0], lngLat[1]);
+    const elev = (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded())
+      ? RoiSampler.sampleAtLngLat(lngLat[0], lngLat[1])
+      : await DemSampler.sampleAtLngLat(lngLat[0], lngLat[1]);
     if (trailElevations[trailName]) {
       trailElevations[trailName].splice(insertIndex, 0, elev);
     }
@@ -445,22 +464,44 @@ const VertexEditor = (() => {
    * Initialize elevations for all trails by sampling DEM
    */
   async function loadElevations() {
+    const useRoi = typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded();
+    const useDem = DemSampler.isLoaded();
+    console.log(`[VertexEditor] loadElevations: RoiSampler=${useRoi}, DemSampler=${useDem}, trails=${trailData ? trailData.features.length : 0}`);
+
+    if (!useRoi && !useDem) {
+      console.warn('[VertexEditor] No elevation source available — skipping');
+      return;
+    }
+
     setStatus('Sampling elevations from DEM...');
     let totalVerts = 0;
+    let nullCount = 0;
 
     for (const feature of trailData.features) {
       const name = feature.properties.Name || feature.properties.name || 'unknown';
       const coords = feature.geometry.coordinates;
-      const elevs = await DemSampler.sampleBatch(coords);
+      const elevs = useRoi
+        ? RoiSampler.sampleBatch(coords)
+        : await DemSampler.sampleBatch(coords);
       trailElevations[name] = elevs;
       totalVerts += coords.length;
+      const trailNulls = elevs.filter(e => e == null).length;
+      nullCount += trailNulls;
+      if (trailNulls > 0) {
+        console.warn(`[VertexEditor] Trail "${name}": ${trailNulls}/${coords.length} vertices have null elevation (outside DEM extent?)`);
+      }
 
       // Compute initial metrics
       const result = TrailMetrics.compute(coords, elevs);
       trailMetrics[name] = result;
     }
 
-    setStatus(`Loaded elevations for ${totalVerts} vertices`);
+    if (nullCount > 0) {
+      setStatus(`Loaded elevations for ${totalVerts} vertices (${nullCount} outside DEM)`);
+    } else {
+      setStatus(`Loaded elevations for ${totalVerts} vertices`);
+    }
+    console.log(`[VertexEditor] Elevation sampling complete: ${totalVerts} vertices, ${nullCount} nulls`);
     return trailMetrics;
   }
 
@@ -709,7 +750,9 @@ const VertexEditor = (() => {
 
     // Sample elevations for new coords
     let newElevs = null;
-    if (DemSampler.isLoaded()) {
+    if (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded()) {
+      newElevs = RoiSampler.sampleBatch(newCoords);
+    } else if (DemSampler.isLoaded()) {
       newElevs = await DemSampler.sampleBatch(newCoords);
     }
 

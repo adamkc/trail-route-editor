@@ -7,10 +7,12 @@ const Projection = (() => {
     '+proj=utm +zone=10 +datum=NAD83 +units=m +no_defs +type=crs');
 
   function wgs84ToUtm(lng, lat) {
+    if (!isFinite(lng) || !isFinite(lat)) return [NaN, NaN];
     return proj4('EPSG:4326', 'EPSG:26910', [lng, lat]);
   }
 
   function utmToWgs84(easting, northing) {
+    if (!isFinite(easting) || !isFinite(northing)) return [NaN, NaN];
     return proj4('EPSG:26910', 'EPSG:4326', [easting, northing]);
   }
 
@@ -19,6 +21,9 @@ const Projection = (() => {
    * by converting to UTM first.
    */
   function distanceM(lngLat1, lngLat2) {
+    if (!lngLat1 || !lngLat2 ||
+        !isFinite(lngLat1[0]) || !isFinite(lngLat1[1]) ||
+        !isFinite(lngLat2[0]) || !isFinite(lngLat2[1])) return 0;
     const [e1, n1] = wgs84ToUtm(lngLat1[0], lngLat1[1]);
     const [e2, n2] = wgs84ToUtm(lngLat2[0], lngLat2[1]);
     return Math.sqrt((e2 - e1) ** 2 + (n2 - n1) ** 2);

@@ -3,14 +3,18 @@
  *
  * Enter draw mode → click to add vertices → double-click or Enter to finish.
  * Escape cancels. Shows a live preview line + vertex dots while drawing.
+ * Hover tooltip shows segment length, elevation change, and slope %.
  */
 const DrawRoute = (() => {
   let active = false;
   let coords = [];        // [lng, lat] pairs
+  let elevs = [];         // elevation at each placed vertex
   let routeName = '';
   let onFinish = null;     // callback(name, coords) when route is completed
   let onCancelCb = null;   // callback() when drawing is cancelled
   let mapInstance = null;
+  let tooltipEl = null;
+  let totalDist = 0;       // cumulative distance of placed vertices
 
   const SOURCE_ID = 'draw-preview';
   const LINE_LAYER = 'draw-preview-line';
@@ -18,6 +22,7 @@ const DrawRoute = (() => {
 
   function init(map) {
     mapInstance = map;
+    tooltipEl = document.getElementById('elev-tooltip');
 
     // Add empty source + layers for live preview
     map.addSource(SOURCE_ID, {
@@ -59,12 +64,24 @@ const DrawRoute = (() => {
     return { type: 'FeatureCollection', features: [] };
   }
 
+  /**
+   * Sample elevation at a [lng, lat] coordinate.
+   */
+  function sampleElev(lngLat) {
+    if (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded()) {
+      return RoiSampler.sampleAtLngLat(lngLat[0], lngLat[1]);
+    }
+    return null;
+  }
+
   function start(name, callback, cancelCallback) {
     if (active) return;
     if (!mapInstance) { console.error('[Draw] Map not initialized'); return; }
 
     active = true;
     coords = [];
+    elevs = [];
+    totalDist = 0;
     routeName = name;
     onFinish = callback;
     onCancelCb = cancelCallback || null;
@@ -89,7 +106,15 @@ const DrawRoute = (() => {
 
   function handleClick(e) {
     if (!active) return;
-    coords.push([e.lngLat.lng, e.lngLat.lat]);
+    const pt = [e.lngLat.lng, e.lngLat.lat];
+
+    // Track cumulative distance
+    if (coords.length > 0) {
+      totalDist += Projection.distanceM(coords[coords.length - 1], pt);
+    }
+
+    coords.push(pt);
+    elevs.push(sampleElev(pt));
     updatePreview();
   }
 
@@ -103,17 +128,104 @@ const DrawRoute = (() => {
       const prev = coords[coords.length - 2];
       if (Math.abs(last[0] - prev[0]) < 1e-8 && Math.abs(last[1] - prev[1]) < 1e-8) {
         coords.pop();
+        elevs.pop();
+        // Recompute totalDist
+        totalDist = 0;
+        for (let i = 1; i < coords.length; i++) {
+          totalDist += Projection.distanceM(coords[i - 1], coords[i]);
+        }
       }
     }
     finish();
   }
 
-  // Rubberband: show a line from last vertex to cursor
+  // Rubberband: show a line from last vertex to cursor + tooltip
   let rubberCoord = null;
   function handleMouseMove(e) {
-    if (!active || coords.length === 0) return;
+    if (!active) return;
     rubberCoord = [e.lngLat.lng, e.lngLat.lat];
-    updatePreview();
+
+    if (coords.length > 0) {
+      updatePreview();
+      updateTooltip(e.point);
+    } else {
+      // No vertices yet — show elevation at cursor
+      updateTooltipBare(e.point);
+    }
+  }
+
+  /**
+   * Show tooltip with segment info relative to last placed vertex.
+   */
+  function updateTooltip(screenPoint) {
+    if (!tooltipEl) return;
+
+    const lastCoord = coords[coords.length - 1];
+    const lastElev = elevs[elevs.length - 1];
+    const cursorElev = sampleElev(rubberCoord);
+
+    // Segment distance from last vertex to cursor
+    const segDist = Projection.distanceM(lastCoord, rubberCoord);
+    // Cumulative distance including this rubber segment
+    const cumDist = totalDist + segDist;
+
+    // Build tooltip lines
+    const lines = [];
+
+    // Elevation at cursor
+    if (cursorElev != null) {
+      lines.push(`Elev: ${Math.round(cursorElev)}m`);
+    }
+
+    // Segment info (from last vertex)
+    if (segDist > 0) {
+      let segLine = `Seg: ${formatDist(segDist)}`;
+      if (lastElev != null && cursorElev != null) {
+        const de = cursorElev - lastElev;
+        const slope = (de / segDist) * 100;
+        segLine += ` | ${de >= 0 ? '+' : ''}${de.toFixed(1)}m | ${slope.toFixed(1)}%`;
+      }
+      lines.push(segLine);
+    }
+
+    // Cumulative distance
+    if (coords.length >= 1) {
+      lines.push(`Total: ${formatDist(cumDist)} (${coords.length} pts)`);
+    }
+
+    tooltipEl.innerHTML = lines.join('<br>');
+    tooltipEl.classList.remove('hidden');
+    positionTooltip(screenPoint);
+  }
+
+  /**
+   * Show just elevation at cursor when no vertices placed yet.
+   */
+  function updateTooltipBare(screenPoint) {
+    if (!tooltipEl) return;
+    const elev = sampleElev(rubberCoord);
+    if (elev != null) {
+      tooltipEl.textContent = `Elev: ${Math.round(elev)}m`;
+      tooltipEl.classList.remove('hidden');
+      positionTooltip(screenPoint);
+    } else {
+      tooltipEl.classList.add('hidden');
+    }
+  }
+
+  function positionTooltip(screenPoint) {
+    if (!tooltipEl) return;
+    tooltipEl.style.left = (screenPoint.x + 15) + 'px';
+    tooltipEl.style.top = (screenPoint.y - 15) + 'px';
+  }
+
+  function hideTooltip() {
+    if (tooltipEl) tooltipEl.classList.add('hidden');
+  }
+
+  function formatDist(meters) {
+    if (meters >= 1000) return (meters / 1000).toFixed(2) + 'km';
+    return Math.round(meters) + 'm';
   }
 
   function handleKey(e) {
@@ -126,6 +238,12 @@ const DrawRoute = (() => {
       // Undo last point
       if (coords.length > 0) {
         coords.pop();
+        elevs.pop();
+        // Recompute totalDist
+        totalDist = 0;
+        for (let i = 1; i < coords.length; i++) {
+          totalDist += Projection.distanceM(coords[i - 1], coords[i]);
+        }
         updatePreview();
       }
     }
@@ -186,7 +304,11 @@ const DrawRoute = (() => {
   function cleanup() {
     active = false;
     coords = [];
+    elevs = [];
+    totalDist = 0;
     rubberCoord = null;
+
+    hideTooltip();
 
     if (mapInstance) {
       mapInstance.off('click', handleClick);

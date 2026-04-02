@@ -5,6 +5,7 @@ const OptimizerUI = (() => {
 
   let abortFlag = false;
   let running = false;
+  let lastFrozenCoords = null; // WGS84 frozen positions from Phase 1 (for Phase 2 handoff)
 
   // Persist last-used parameter values between sessions
   const lastParams = {};
@@ -288,10 +289,14 @@ const OptimizerUI = (() => {
     try {
       const result = await SpringMass.optimize(origCoords, origElevs, params, callbacks, frozenArray);
 
+      // Store frozen coords for Phase 2
+      lastFrozenCoords = result.frozenCoords || null;
+
       if (result.aborted) {
         // Remove the preview trail
         VertexEditor.removeTrailFeature(previewName);
         progressText.textContent = 'Aborted — preview removed';
+        lastFrozenCoords = null;
       } else {
         // Finalize the optimized trail with proper coords + elevations
         VertexEditor.setTrailCoords(previewName, result.coords, result.elevations, false);
@@ -366,7 +371,9 @@ const OptimizerUI = (() => {
 
     const targetName = trailFeature.properties.Name || trailFeature.properties.name || optimizedName;
     const coords = trailFeature.geometry.coordinates.map(c => [c[0], c[1]]);
-    const elevs = await Promise.all(coords.map(c => DemSampler.sampleAtLngLat(c[0], c[1])));
+    const elevs = (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded())
+      ? coords.map(c => RoiSampler.sampleAtLngLat(c[0], c[1]))
+      : await Promise.all(coords.map(c => DemSampler.sampleAtLngLat(c[0], c[1])));
 
     const callbacks = {
       onProgress(pass, totalPasses, steepCount, maxSeg) {
@@ -384,7 +391,7 @@ const OptimizerUI = (() => {
     };
 
     try {
-      const result = await SpringMass.gradeRedistribute(coords, elevs, params, callbacks);
+      const result = await SpringMass.gradeRedistribute(coords, elevs, params, callbacks, lastFrozenCoords);
 
       // Update the trail with smoothed coords
       VertexEditor.setTrailCoords(targetName, result.coords, result.elevations, false);

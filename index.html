@@ -57,6 +57,7 @@
       <button id="btn-hillshade" class="basemap-btn active">Hillshade</button>
       <button id="btn-satellite" class="basemap-btn">Satellite</button>
       <button id="btn-recenter" title="Reset map: flat view, fit to trails">Recenter</button>
+      <button id="btn-clear-cache" title="Clear cached terrain tiles and preprocessed data">Clear Cache</button>
       <button id="btn-guide" title="Quick use guide">Guide</button>
     </div>
     <div id="status-bar"></div>
@@ -183,6 +184,39 @@
     </div>
   </div>
 
+  <!-- Preprocess panel (shown for large DEMs) -->
+  <div id="preprocess-panel" class="preprocess-panel hidden">
+    <div class="preprocess-header">
+      <h3>DEM Preprocessing</h3>
+      <p id="pp-status">Large DEM detected — processing terrain data for your trail area.</p>
+    </div>
+    <div class="preprocess-steps">
+      <div class="preprocess-step">
+        <span class="step-num">1</span>
+        <span>Load DEM (header only)</span>
+        <span class="step-status" id="pp-dem-status"></span>
+      </div>
+      <div class="preprocess-step">
+        <span class="step-num">2</span>
+        <span>Load trails (defines ROI)</span>
+        <span class="step-status" id="pp-trails-status"></span>
+      </div>
+      <div class="preprocess-step">
+        <span class="step-num">3</span>
+        <span>Process terrain data</span>
+        <span class="step-status" id="pp-process-status"></span>
+      </div>
+    </div>
+    <div class="preprocess-progress hidden" id="pp-progress">
+      <div class="opt-progress-bar"><div class="opt-progress-fill" id="pp-progress-fill"></div></div>
+      <div class="opt-progress-text" id="pp-progress-text"></div>
+    </div>
+    <div class="preprocess-actions">
+      <button id="btn-pp-start" class="opt-btn opt-btn-primary" disabled>Process</button>
+      <button id="btn-pp-skip" class="opt-btn">Skip (use full DEM)</button>
+    </div>
+  </div>
+
   <!-- Main content -->
   <div id="main">
     <!-- Map — full width -->
@@ -275,7 +309,9 @@
   <!-- App modules -->
   <script src="js/file-picker.js"></script>
   <script src="js/projection.js"></script>
+  <script src="js/cache-store.js"></script>
   <script src="js/dem-sampler.js"></script>
+  <script src="js/roi-sampler.js"></script>
   <script src="js/contour-generator.js"></script>
   <script src="js/trail-metrics.js"></script>
   <script src="js/profile-charts.js"></script>
@@ -291,6 +327,7 @@
   <script src="js/spring-mass.js"></script>
   <script src="js/optimizer-ui.js"></script>
   <script src="js/map.js"></script>
+  <script src="js/dem-preprocessor.js"></script>
   <script src="js/app.js"></script>
 
   <!-- GoatCounter analytics -->

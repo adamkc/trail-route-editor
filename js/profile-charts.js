@@ -91,21 +91,19 @@ const ProfileCharts = (() => {
 
     // Shared hover handler — reads the x value (distance) from parsed data
     function handleHover(evt, elements, chart) {
-      if (!onHoverCallback) return;
-      if (elements.length > 0) {
-        const dist = elements[0].element.$context.parsed.x;
-        const coord = coordAtDistance(dist);
-        if (coord) onHoverCallback(coord);
-      }
+      if (!onHoverCallback || !elements.length) return;
+      const parsed = elements[0].element?.$context?.parsed;
+      if (!parsed) return;
+      const coord = coordAtDistance(parsed.x);
+      if (coord) onHoverCallback(coord);
     }
 
     function handleClick(evt, elements, chart) {
-      if (!onClickCallback) return;
-      if (elements.length > 0) {
-        const dist = elements[0].element.$context.parsed.x;
-        const coord = coordAtDistance(dist);
-        if (coord) onClickCallback(coord);
-      }
+      if (!onClickCallback || !elements.length) return;
+      const parsed = elements[0].element?.$context?.parsed;
+      if (!parsed) return;
+      const coord = coordAtDistance(parsed.x);
+      if (coord) onClickCallback(coord);
     }
 
     function handleLeave() {

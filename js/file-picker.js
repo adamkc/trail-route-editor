@@ -274,7 +274,7 @@ const FilePicker = (() => {
       if (data.dems.length > 0) {
         html += '<div class="file-group"><div class="file-group-label">DEM Rasters</div>';
         for (const f of data.dems) {
-          html += `<div class="file-item" data-path="${f.path}">
+          html += `<div class="file-item" data-path="${f.path}" data-name="${f.name}" data-size="${f.size_mb}">
             <div>
               <div class="file-item-name">${f.name}</div>
               <div class="file-item-dir">${f.dir}</div>
@@ -291,7 +291,7 @@ const FilePicker = (() => {
         if (others.length > 0) {
           html += '<div class="file-group"><div class="file-group-label">Other Rasters</div>';
           for (const f of others) {
-            html += `<div class="file-item" data-path="${f.path}">
+            html += `<div class="file-item" data-path="${f.path}" data-name="${f.name}" data-size="${f.size_mb}">
               <div>
                 <div class="file-item-name">${f.name}</div>
                 <div class="file-item-dir">${f.dir}</div>
@@ -308,7 +308,10 @@ const FilePicker = (() => {
       body().querySelectorAll('.file-item').forEach(el => {
         el.addEventListener('click', () => {
           close();
-          onSelect('/api/file?path=' + encodeURIComponent(el.dataset.path));
+          const url = '/api/file?path=' + encodeURIComponent(el.dataset.path);
+          const fileName = el.dataset.name || el.dataset.path.split('/').pop();
+          const fileSizeBytes = parseFloat(el.dataset.size || '0') * 1024 * 1024;
+          onSelect(url, null, fileName, fileSizeBytes);
         });
       });
 
@@ -341,8 +344,8 @@ const FilePicker = (() => {
           ' (' + (file.size / 1024 / 1024).toFixed(1) + ' MB)...</div>';
         const buffer = await file.arrayBuffer();
         close();
-        // Pass ArrayBuffer as 2nd arg, filename as 3rd
-        onSelect(null, buffer, file.name);
+        // Pass ArrayBuffer as 2nd arg, filename as 3rd, fileSize as 4th
+        onSelect(null, buffer, file.name, file.size);
       } catch (err) {
         body().innerHTML = '<div class="loading-spinner">Error: ' + err.message + '</div>';
       }

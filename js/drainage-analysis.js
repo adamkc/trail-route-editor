@@ -76,10 +76,14 @@ const DrainageAnalysis = (() => {
   async function analyze(coords, opts = {}) {
     const { angleTolerance, minRunLength } = { ...DEFAULTS, ...opts };
 
-    if (!DemSampler.isLoaded() || coords.length < 2) return [];
+    if (coords.length < 2) return [];
 
-    // Load raster for synchronous sampling
-    raster = await DemSampler.getFullRaster();
+    // Use ROI raster if available, fall back to full DEM
+    if (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded()) {
+      raster = RoiSampler.getFullRaster();
+    } else if (DemSampler.isLoaded()) {
+      raster = await DemSampler.getFullRaster();
+    }
     if (!raster) return [];
 
     // Convert all coords to UTM

@@ -34,8 +34,30 @@ const SpringMass = (() => {
   // ── Aspect grid (computed once from DEM raster) ──
   let aspectGrid = null;  // { data, width, height, originX, originY, pxX, pxY }
 
+  /**
+   * Load a pre-built aspect grid from cache (preprocessed DEM).
+   */
+  async function loadAspectGridFromCache(demId) {
+    const grid = await CacheStore.getGrid('aspect-grid', demId);
+    if (!grid) return null;
+    aspectGrid = grid;
+    console.log('[SpringMass] Aspect grid loaded from cache:', grid.width, 'x', grid.height);
+    return aspectGrid;
+  }
+
+  /**
+   * Get the best available raster (ROI first, then full DEM).
+   */
+  async function getBestRaster() {
+    if (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded()) {
+      const r = RoiSampler.getFullRaster();
+      if (r) return r;
+    }
+    return DemSampler.getFullRaster();
+  }
+
   async function buildAspectGrid() {
-    const r = await DemSampler.getFullRaster();
+    const r = await getBestRaster();
     if (!r) return null;
     const { data, width, height, originX, originY, pixelSizeX, pixelSizeY } = r;
 
@@ -278,23 +300,35 @@ const SpringMass = (() => {
 
   // ── Smooth result (3-point moving average + grade-aware Douglas-Peucker) ──
 
-  function smoothCoords(coords, n, raster, maxGradeLimit) {
+  function smoothCoords(coords, n, raster, maxGradeLimit, frozenFlags) {
     const out = new Float64Array(n * 2);
     // Copy endpoints
     out[0] = coords[0]; out[1] = coords[1];
     out[(n - 1) * 2] = coords[(n - 1) * 2]; out[(n - 1) * 2 + 1] = coords[(n - 1) * 2 + 1];
-    // 3-point average for interior
+    // 3-point average for interior — skip frozen vertices
     for (let j = 1; j < n - 1; j++) {
-      out[j * 2]     = (coords[(j - 1) * 2]     + coords[j * 2]     + coords[(j + 1) * 2]) / 3;
-      out[j * 2 + 1] = (coords[(j - 1) * 2 + 1] + coords[j * 2 + 1] + coords[(j + 1) * 2 + 1]) / 3;
+      if (frozenFlags && frozenFlags[j]) {
+        // Frozen: keep exact position
+        out[j * 2]     = coords[j * 2];
+        out[j * 2 + 1] = coords[j * 2 + 1];
+      } else {
+        out[j * 2]     = (coords[(j - 1) * 2]     + coords[j * 2]     + coords[(j + 1) * 2]) / 3;
+        out[j * 2 + 1] = (coords[(j - 1) * 2 + 1] + coords[j * 2 + 1] + coords[(j + 1) * 2 + 1]) / 3;
+      }
     }
     // Grade-aware Douglas-Peucker simplification (0.5m tolerance)
-    return douglasPeucker(out, n, 0.5, raster, maxGradeLimit);
+    return douglasPeucker(out, n, 0.5, raster, maxGradeLimit, frozenFlags);
   }
 
-  function douglasPeucker(flatCoords, n, tolerance, raster, maxGradeLimit) {
+  function douglasPeucker(flatCoords, n, tolerance, raster, maxGradeLimit, frozenFlags) {
     const keep = new Uint8Array(n);
     keep[0] = 1; keep[n - 1] = 1;
+    // Always keep frozen vertices — they must not be simplified away
+    if (frozenFlags) {
+      for (let i = 0; i < n; i++) {
+        if (frozenFlags[i]) keep[i] = 1;
+      }
+    }
     dpRecurse(flatCoords, 0, n - 1, tolerance, keep, raster, maxGradeLimit);
     const result = [];
     for (let i = 0; i < n; i++) {
@@ -369,7 +403,7 @@ const SpringMass = (() => {
     if (!aspectGrid) {
       await buildAspectGrid();
     }
-    const raster = await DemSampler.getFullRaster();
+    const raster = await getBestRaster();
     if (!raster) throw new Error('DEM not loaded');
     // Attach raster metadata for sampleElevUTM
     raster.pxX = raster.pixelSizeX;
@@ -401,7 +435,8 @@ const SpringMass = (() => {
         coords: wgs84Coords.map(c => [...c]),
         elevations: [...elevations],
         converged: true, aborted: false,
-        stats: { grade: elevChange / origLength, length: origLength, mse: 0, iterations: 0 }
+        stats: { grade: elevChange / origLength, length: origLength, mse: 0, iterations: 0,
+                 origLength, origGrade: elevChange / origLength, idealLength: origLength, elevChange }
       };
     }
 
@@ -613,8 +648,18 @@ const SpringMass = (() => {
       }
     }
 
+    // Collect frozen vertex WGS84 positions before smoothing (for Phase 2 handoff)
+    const frozenWgs84 = [];
+    for (let j = 0; j < n; j++) {
+      if (frozenFlags[j]) {
+        const [lng, lat] = Projection.utmToWgs84(finalCoords[j * 2], finalCoords[j * 2 + 1]);
+        frozenWgs84.push([lng, lat]);
+      }
+    }
+
     // Smooth the result (pass raster + maxGrade so DP won't re-introduce steep segments)
-    const smoothedUTM = smoothCoords(finalCoords, n, raster, P.maxGrade);
+    // Pass frozenFlags so frozen vertices are preserved through smoothing + simplification
+    const smoothedUTM = smoothCoords(finalCoords, n, raster, P.maxGrade, frozenFlags);
 
     // Convert back to WGS84
     const resultCoords = smoothedUTM.map(([e, n]) => {
@@ -622,10 +667,13 @@ const SpringMass = (() => {
       return [lng, lat];
     });
 
-    // Sample elevations for result
+    // Sample elevations for result (prefer RoiSampler, fall back to DemSampler)
+    const useRoi = typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded();
     const resultElevs = [];
     for (const c of resultCoords) {
-      const elev = await DemSampler.sampleAtLngLat(c[0], c[1]);
+      const elev = useRoi
+        ? RoiSampler.sampleAtLngLat(c[0], c[1])
+        : await DemSampler.sampleAtLngLat(c[0], c[1]);
       resultElevs.push(elev);
     }
 
@@ -633,6 +681,7 @@ const SpringMass = (() => {
     return {
       coords: resultCoords,
       elevations: resultElevs,
+      frozenCoords: frozenWgs84, // WGS84 positions of frozen vertices (for Phase 2)
       converged,
       aborted,
       stats: {
@@ -669,7 +718,7 @@ const SpringMass = (() => {
    * @param {Object} callbacks  - { onProgress, onFrame, shouldAbort }
    * @returns {Promise<{coords, elevations, stats}>}
    */
-  async function gradeRedistribute(wgs84Coords, elevations, params, callbacks) {
+  async function gradeRedistribute(wgs84Coords, elevations, params, callbacks, frozenCoords) {
     const maxGrade = params.maxGrade || 0.20;
     const windowM = params.gradeWindow || 40;
     const passes = params.gradePasses || 30;
@@ -684,6 +733,29 @@ const SpringMass = (() => {
 
     // Convert to UTM for metric calculations
     const utmCoords = wgs84Coords.map(c => Projection.wgs84ToUtm(c[0], c[1]));
+
+    // Build frozen flags by matching frozen WGS84 coords to Phase 2 vertices
+    // (Phase 1 output has different vertex count than original, so we match by proximity)
+    const p2Frozen = new Uint8Array(n);
+    if (frozenCoords && frozenCoords.length > 0) {
+      const frozenUTM = frozenCoords.map(c => Projection.wgs84ToUtm(c[0], c[1]));
+      const SNAP_DIST = 2.0; // meters — snap threshold for matching frozen positions
+      for (let i = 0; i < n; i++) {
+        for (const fc of frozenUTM) {
+          const dx = utmCoords[i][0] - fc[0];
+          const dy = utmCoords[i][1] - fc[1];
+          if (Math.sqrt(dx * dx + dy * dy) < SNAP_DIST) {
+            p2Frozen[i] = 1;
+            break;
+          }
+        }
+      }
+      // Endpoints always frozen
+      p2Frozen[0] = 1;
+      p2Frozen[n - 1] = 1;
+      const fc = p2Frozen.reduce((s, v) => s + v, 0);
+      console.log(`[Phase2] ${fc}/${n} vertices frozen`);
+    }
 
     // Working copy of UTM coords
     const wx = utmCoords.map(c => c[0]);
@@ -701,7 +773,7 @@ const SpringMass = (() => {
     }
     updateCumDist();
 
-    const raster = await DemSampler.getFullRaster();
+    const raster = await getBestRaster();
     if (raster) {
       raster.pxX = raster.pixelSizeX;
       raster.pxY = raster.pixelSizeY;
@@ -761,11 +833,15 @@ const SpringMass = (() => {
         if (dElev / dist > maxGrade) isProblematic[i] = 1;
       }
 
-      // Don't move endpoints
+      // Don't move endpoints or frozen vertices
       isProblematic[0] = 0;
       isProblematic[n - 1] = 0;
+      for (let i = 0; i < n; i++) {
+        if (p2Frozen[i]) isProblematic[i] = 0;
+      }
 
       // Build contiguous zones from problematic vertices
+      // Frozen vertices have isProblematic=0, so they naturally act as zone boundaries
       const zones = [];
       let inZone = false, zoneStart = 0;
       for (let i = 0; i < n; i++) {
@@ -840,9 +916,10 @@ const SpringMass = (() => {
 
       // Laplacian smoothing pass — pull each moved vertex toward its neighbors' midpoint
       // This prevents the trail from developing kinks/detours from lateral moves
+      // Skip frozen vertices — they must not move
       const smoothBlend = Math.min(0.3, stepScale * 0.75);
       for (let j = 1; j < n - 1; j++) {
-        if (!isProblematic[j]) continue;
+        if (!isProblematic[j] || p2Frozen[j]) continue;
         const mx = (wx[j - 1] + wx[j + 1]) / 2;
         const my = (wy[j - 1] + wy[j + 1]) / 2;
         wx[j] += smoothBlend * (mx - wx[j]);
@@ -907,5 +984,5 @@ const SpringMass = (() => {
     };
   }
 
-  return { optimize, gradeRedistribute, DEFAULTS, buildAspectGrid };
+  return { optimize, gradeRedistribute, DEFAULTS, buildAspectGrid, loadAspectGridFromCache };
 })();
