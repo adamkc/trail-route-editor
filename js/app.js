@@ -866,6 +866,161 @@
     return `${projectName ? slug(projectName) : 'trails'}_${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   }
 
+  // ── Simple modal (shares the file picker's overlay) ──
+  const modalOverlay = document.getElementById('modal-overlay');
+  const hideModal = () => {
+    modalOverlay.classList.add('hidden');
+    document.getElementById('modal-body').innerHTML = '';
+  };
+  document.getElementById('modal-close').addEventListener('click', hideModal);
+
+  function showModal(title, bodyEl, buttons) {
+    document.getElementById('modal-title').textContent = title;
+    const body = document.getElementById('modal-body');
+    body.innerHTML = '';
+    body.appendChild(bodyEl);
+    const row = document.createElement('div');
+    row.className = 'preprocess-actions';
+    row.style.marginTop = '16px';
+    for (const b of buttons) {
+      const btn = document.createElement('button');
+      btn.className = 'opt-btn' + (b.primary ? ' opt-btn-primary' : '');
+      btn.textContent = b.label;
+      btn.addEventListener('click', () => { hideModal(); if (b.onClick) b.onClick(); });
+      row.appendChild(btn);
+    }
+    body.appendChild(row);
+    modalOverlay.classList.remove('hidden');
+  }
+
+  // ── Get Terrain (USGS 3DEP) ──
+  function trailBboxWgs84() {
+    let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
+    for (const f of trailData.features) {
+      for (const [lng, lat] of f.geometry.coordinates) {
+        if (lng < west) west = lng;
+        if (lng > east) east = lng;
+        if (lat < south) south = lat;
+        if (lat > north) north = lat;
+      }
+    }
+    return { west, south, east, north };
+  }
+
+  document.getElementById('btn-get-terrain').addEventListener('click', () => {
+    const n = trailData ? trailData.features.length : 0;
+    const useTrails = n > 0 && !isDemo;
+    let bbox, areaText;
+    if (useTrails) {
+      bbox = trailBboxWgs84();
+      areaText = `around the ${n} loaded trail${n === 1 ? '' : 's'} (500 m buffer)`;
+    } else {
+      const b = TrailMap.getMap().getBounds();
+      bbox = { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() };
+      areaText = 'for the area shown on the map';
+    }
+    const buffer = useTrails ? 500 : 0;
+    let p = TerrainFetch.plan(bbox, buffer);
+
+    const body = document.createElement('div');
+    body.style.cssText = 'font-size: 13px; line-height: 1.55; color: #c0c0c0; max-width: 520px;';
+    const para = (text) => { const el = document.createElement('p'); el.style.margin = '0 0 10px'; el.textContent = text; body.appendChild(el); return el; };
+    if (p.error) {
+      para(p.error);
+      showModal('Get terrain (USGS 3DEP)', body, [{ label: 'Close' }]);
+      return;
+    }
+    const summary = para('');
+    const describe = () => {
+      summary.textContent = `Downloads elevation ${areaText}: ${p.widthKm.toFixed(1)} × ${p.heightKm.toFixed(1)} km ` +
+        `at ${p.res} m (${(p.W * p.H / 1e6).toFixed(1)} million pixels, about ${Math.max(1, Math.round(p.mb))} MB). ` +
+        'USGS serves roughly 0.2–0.7 MB per second, so large areas at 1 m take a few minutes.';
+    };
+    describe();
+    if (p.options.length > 1) {
+      const row = para('Resolution: ');
+      const sel = document.createElement('select');
+      sel.id = 'terrain-res';
+      sel.style.cssText = 'background:#0f3460;color:#e0e0e0;border:1px solid #1a4080;border-radius:4px;padding:2px 6px;';
+      for (const o of p.options) {
+        const opt = document.createElement('option');
+        opt.value = o.res;
+        opt.textContent = `${o.res} m (~${Math.max(1, Math.round(o.mb))} MB)`;
+        sel.appendChild(opt);
+      }
+      sel.addEventListener('change', () => { p = TerrainFetch.plan(bbox, buffer, Number(sel.value)); describe(); });
+      row.appendChild(sel);
+    }
+    para('Source: USGS 3D Elevation Program, the best data available at each spot (1 m lidar where it exists, ' +
+         'otherwise about 10 m). United States only.');
+    para('The area\'s bounding box is sent to elevation.nationalmap.gov to request the data. Nothing else leaves your browser.');
+    if (!useTrails) {
+      para('Tip: zoom the map to your project area first (Satellite helps you find it), or load or draw trails ' +
+           'so the download follows them.');
+    }
+    showModal('Get terrain (USGS 3DEP)', body, [
+      { label: 'Download', primary: true, onClick: () => fetchTerrain(p) },
+      { label: 'Cancel' }
+    ]);
+  });
+
+  async function fetchTerrain(p) {
+    const prevCrs = Projection.getCrs();
+    const prevDemId = cachedDemId;
+    const label = `USGS 3DEP ${p.res} m`;
+    const demId = `usgs3dep_${p.epsg}_${Math.round(p.minE)}_${Math.round(p.maxN)}_${p.W}x${p.H}_${p.res}m`;
+    if (DemPanel.isOpen()) cancelDemPanel();
+    try {
+      if (await CacheStore.hasCachedDem(demId)) {
+        await enterAppModeFromCache(demId);
+        demLabel = label;
+        return;
+      }
+      Notice.show('terrain', 'Downloading elevation from USGS 3DEP…', { level: 'info' });
+      const roi = await TerrainFetch.fetchMosaic(p, (got, expected) =>
+        status(`Downloading USGS 3DEP elevation: ${(got / 1e6).toFixed(0)} of ~${Math.round(expected / 1e6)} MB`));
+      const range = DemPreprocessor.elevationRange(roi);
+      if (!range) throw new Error('USGS returned no elevation for this area (3DEP covers the United States only).');
+
+      Projection.setUtm(p.zone, p.south, p.datum);
+      DemPreprocessor.setRoiRaster(roi, demId, `${label} (${Projection.getCrs().label})`);
+      RoiSampler.loadFromRaster(roi, demId);
+
+      // Demo trails outside the downloaded area are cleared, as for a loaded DEM
+      if (isDemo && trailData && !trailData.features.some(f =>
+          f.geometry.coordinates.some(c => RoiSampler.sampleAtLngLat(c[0], c[1]) != null))) {
+        clearTrails();
+        isDemo = false;
+        Notice.clear('demo');
+      }
+
+      await DemPreprocessor.runPreprocessing({
+        onStep: (s, detail) => status(detail),
+        onTileProgress: (current, total, type) =>
+          status(`${type === 'contours' ? 'Contour' : 'Terrain'} tiles: ${current}/${total} (${Math.round(current / total * 100)}%)`)
+      });
+      DemPreprocessor.releaseMemory();
+      demLoaded = true;
+      demLabel = label;
+      await enterAppModeFromCache(demId);
+      Notice.show('terrain',
+        `Loaded USGS 3DEP elevation: ${p.widthKm.toFixed(1)} × ${p.heightKm.toFixed(1)} km at ${p.res} m ` +
+        `(${Math.round(range.min)}–${Math.round(range.max)} m).`, { level: 'info', timeout: 12000 });
+    } catch (err) {
+      console.error('3DEP fetch error:', err);
+      Projection.setUtm(prevCrs.zone, prevCrs.south, prevCrs.datum);
+      if (prevDemId) {
+        if (!RoiSampler.isLoadedFor(prevDemId)) await RoiSampler.loadFromCache(prevDemId);
+        DemPreprocessor.setDemId(prevDemId);
+      } else {
+        RoiSampler.release();
+        demLoaded = false;
+      }
+      status('Terrain download failed: ' + err.message);
+      Notice.show('terrain', 'Terrain download failed: ' + err.message, { level: 'error' });
+    }
+  }
+
   // ── Project: new / open / save ──
   document.getElementById('btn-new-project').addEventListener('click', () => newProject());
 
