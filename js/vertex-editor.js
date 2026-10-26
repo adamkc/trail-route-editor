@@ -285,9 +285,7 @@ const VertexEditor = (() => {
     if (!trail) return;
 
     const coord = trail.geometry.coordinates[vertexIndex];
-    const elev = (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded())
-      ? RoiSampler.sampleAtLngLat(coord[0], coord[1])
-      : await DemSampler.sampleAtLngLat(coord[0], coord[1]);
+    const elev = RoiSampler.isLoaded() ? RoiSampler.sampleAtLngLat(coord[0], coord[1]) : null;
 
     if (trailElevations[trailName]) {
       trailElevations[trailName][vertexIndex] = elev;
@@ -373,9 +371,7 @@ const VertexEditor = (() => {
     trail.geometry.coordinates.splice(insertIndex, 0, [lngLat[0], lngLat[1]]);
 
     // Sample elevation
-    const elev = (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded())
-      ? RoiSampler.sampleAtLngLat(lngLat[0], lngLat[1])
-      : await DemSampler.sampleAtLngLat(lngLat[0], lngLat[1]);
+    const elev = RoiSampler.isLoaded() ? RoiSampler.sampleAtLngLat(lngLat[0], lngLat[1]) : null;
     if (trailElevations[trailName]) {
       trailElevations[trailName].splice(insertIndex, 0, elev);
     }
@@ -464,11 +460,10 @@ const VertexEditor = (() => {
    * Initialize elevations for all trails by sampling DEM
    */
   async function loadElevations() {
-    const useRoi = typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded();
-    const useDem = DemSampler.isLoaded();
-    console.log(`[VertexEditor] loadElevations: RoiSampler=${useRoi}, DemSampler=${useDem}, trails=${trailData ? trailData.features.length : 0}`);
+    const useRoi = RoiSampler.isLoaded();
+    console.log(`[VertexEditor] loadElevations: RoiSampler=${useRoi}, trails=${trailData ? trailData.features.length : 0}`);
 
-    if (!useRoi && !useDem) {
+    if (!useRoi) {
       console.warn('[VertexEditor] No elevation source available — skipping');
       return;
     }
@@ -480,9 +475,7 @@ const VertexEditor = (() => {
     for (const feature of trailData.features) {
       const name = feature.properties.Name || feature.properties.name || 'unknown';
       const coords = feature.geometry.coordinates;
-      const elevs = useRoi
-        ? RoiSampler.sampleBatch(coords)
-        : await DemSampler.sampleBatch(coords);
+      const elevs = RoiSampler.sampleBatch(coords);
       trailElevations[name] = elevs;
       totalVerts += coords.length;
       const trailNulls = elevs.filter(e => e == null).length;
@@ -750,10 +743,8 @@ const VertexEditor = (() => {
 
     // Sample elevations for new coords
     let newElevs = null;
-    if (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded()) {
+    if (RoiSampler.isLoaded()) {
       newElevs = RoiSampler.sampleBatch(newCoords);
-    } else if (DemSampler.isLoaded()) {
-      newElevs = await DemSampler.sampleBatch(newCoords);
     }
 
     // Update trail with new coords (this handles undo, metrics, etc.)

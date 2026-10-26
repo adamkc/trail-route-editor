@@ -78,11 +78,8 @@ const DrainageAnalysis = (() => {
 
     if (coords.length < 2) return [];
 
-    // Use ROI raster if available, fall back to full DEM
-    if (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded()) {
+    if (RoiSampler.isLoaded()) {
       raster = RoiSampler.getFullRaster();
-    } else if (DemSampler.isLoaded()) {
-      raster = await DemSampler.getFullRaster();
     }
     if (!raster) return [];
 

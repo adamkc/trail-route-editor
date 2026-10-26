@@ -371,9 +371,7 @@ const OptimizerUI = (() => {
 
     const targetName = trailFeature.properties.Name || trailFeature.properties.name || optimizedName;
     const coords = trailFeature.geometry.coordinates.map(c => [c[0], c[1]]);
-    const elevs = (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded())
-      ? coords.map(c => RoiSampler.sampleAtLngLat(c[0], c[1]))
-      : await Promise.all(coords.map(c => DemSampler.sampleAtLngLat(c[0], c[1])));
+    const elevs = coords.map(c => RoiSampler.sampleAtLngLat(c[0], c[1]));
 
     const callbacks = {
       onProgress(pass, totalPasses, steepCount, maxSeg) {

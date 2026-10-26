@@ -39,21 +39,18 @@ const SpringMass = (() => {
    */
   async function loadAspectGridFromCache(demId) {
     const grid = await CacheStore.getGrid('aspect-grid', demId);
+    // Drop the previous DEM's grid even on a miss; optimize() rebuilds it from the ROI
+    aspectGrid = grid || null;
     if (!grid) return null;
-    aspectGrid = grid;
     console.log('[SpringMass] Aspect grid loaded from cache:', grid.width, 'x', grid.height);
     return aspectGrid;
   }
 
   /**
-   * Get the best available raster (ROI first, then full DEM).
+   * The processed terrain raster (working UTM), or null if none is loaded.
    */
   async function getBestRaster() {
-    if (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded()) {
-      const r = RoiSampler.getFullRaster();
-      if (r) return r;
-    }
-    return DemSampler.getFullRaster();
+    return RoiSampler.isLoaded() ? RoiSampler.getFullRaster() : null;
   }
 
   async function buildAspectGrid() {
@@ -667,15 +664,7 @@ const SpringMass = (() => {
       return [lng, lat];
     });
 
-    // Sample elevations for result (prefer RoiSampler, fall back to DemSampler)
-    const useRoi = typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded();
-    const resultElevs = [];
-    for (const c of resultCoords) {
-      const elev = useRoi
-        ? RoiSampler.sampleAtLngLat(c[0], c[1])
-        : await DemSampler.sampleAtLngLat(c[0], c[1]);
-      resultElevs.push(elev);
-    }
+    const resultElevs = resultCoords.map(c => RoiSampler.sampleAtLngLat(c[0], c[1]));
 
     const finalGrade = elevChange / finalLen;
     return {

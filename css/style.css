@@ -967,3 +967,92 @@ button.active { background: #e94560; border-color: #e94560; }
   gap: 10px;
   align-items: center;
 }
+
+/* ---- DEM setup panel ---- */
+.dem-panel-file {
+  color: #c0c0c0;
+  font-weight: 400;
+  font-size: 12px;
+  margin-left: 8px;
+}
+.dem-grid {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 6px 14px;
+  font-size: 12px;
+  color: #c0c0c0;
+  margin: 6px 0 10px;
+  align-items: baseline;
+}
+.dem-label { color: #888; }
+.dem-value { color: #e0e0e0; }
+.dem-note { color: #8aa0c0; font-size: 11px; margin-left: 6px; }
+.dem-note-error { color: #ff7a7a; }
+.dem-note-warn { color: #f0c060; }
+.dem-area { display: flex; flex-direction: column; gap: 3px; }
+.dem-area input { accent-color: #e94560; margin-right: 4px; }
+.dem-area input:disabled + * { opacity: 0.6; }
+.dem-gdal-hint {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: #0f1a33;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 11px;
+  white-space: pre-wrap;
+  user-select: all;
+}
+#dem-units {
+  background: #0f3460;
+  color: #e0e0e0;
+  border: 1px solid #1a4080;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+.dem-panel-msg { font-size: 12px; color: #a0a0a0; min-height: 0; margin-bottom: 8px; }
+.dem-panel-msg:empty { display: none; }
+
+/* ---- Notices over the map ---- */
+#notice-area {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(720px, calc(100% - 32px));
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+.notice {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #f0f0f0;
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-left: 4px solid #4488ff;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+.notice-warn { border-left-color: #f0c060; }
+.notice-error { border-left-color: #ff5a5a; background: #2a1a24; }
+.notice-text { flex: 1; }
+.notice-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+.notice-actions button { padding: 3px 9px; font-size: 11px; }
+.notice-close {
+  background: none !important;
+  border: none !important;
+  color: #888;
+  font-size: 16px;
+  padding: 0 4px !important;
+  line-height: 1;
+}
+.notice-close:hover { color: #e94560; }

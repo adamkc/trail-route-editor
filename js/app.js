@@ -1,9 +1,9 @@
 /**
  * app.js — Main entry point, wires everything together
  *
- * All DEMs go through the same preprocessing pipeline:
- *   - Small DEMs: header → full extent extract → contour/terrain tiles → cache → app mode (automatic)
- *   - Large DEMs: header → user loads trails → ROI extract → tiles → cache → app mode (interactive)
+ * DEM loading: header → DEM setup panel (CRS, units, processing area) →
+ * extract (reprojecting to UTM if needed) → contour/terrain tiles → cache →
+ * app mode. Previously processed DEMs load straight from cache.
  */
 (async function() {
   const status = (msg) => {
@@ -15,8 +15,12 @@
   let map, trailData, selector;
   let trailNames = [];
   let demLoaded = false;
-  let preprocessMode = false;  // true during preprocessing
   let cachedDemId = null;      // non-null when running from cache
+  let lastDemSource = null;    // { url, fileOrBuffer, fileName, fileSize } for "Reprocess"
+
+  const hasTerrain = () => RoiSampler.isLoaded();
+
+  DemPanel.init();
 
   // ---- Splash screen ----
   const splashOverlay = document.getElementById('splash-overlay');
@@ -87,7 +91,7 @@
   // ---- 4. Load default DEM through unified preprocessing pipeline ----
   try {
     status('Loading DEM...');
-    await loadDemFromSource('data/dem_cropped.tif', null, 'dem_cropped.tif', 0);
+    await loadDemFromSource('data/dem_cropped.tif', null, 'dem_cropped.tif', 0, { auto: true });
   } catch (err) {
     status('Default DEM not found — use Load DEM to pick a file');
     console.warn('Default DEM load:', err);
@@ -175,9 +179,8 @@
 
     status('Loaded ' + data.features.length + ' trails');
 
-    // If in preprocess mode, now that trails are loaded we can enable the Process button
-    if (preprocessMode) {
-      updatePreprocessUI('trails-loaded');
+    if (DemPanel.isOpen()) {
+      DemPanel.updateTrails(trailCountsForDem());
     }
   }
 
@@ -222,21 +225,25 @@
     status('Sampling elevations...');
     try {
       await VertexEditor.loadElevations();
+      checkTrailCoverage();
       // Populate stats for all trails
       console.log('[app] Elevation sampling done, updating stats for:', trailNames);
       for (const tn of trailNames) {
         const m = VertexEditor.getMetrics(tn);
         if (m) StatsPanel.updateStats(m.summary, tn);
       }
-      // Show the currently selected trail, or first trail
+      // Show the currently selected trail, or the first trail that has terrain under it
+      const hasElev = (n) => (VertexEditor.getElevations(n) || []).some(v => v != null);
       const current = selector.value;
-      if (current && current !== '__all__' && trailNames.includes(current)) {
+      if (current && current !== '__all__' && trailNames.includes(current) &&
+          (hasElev(current) || !trailNames.some(hasElev))) {
         showTrailData(current);
         VertexEditor.selectTrail(current);
       } else if (trailNames.length > 0) {
-        selector.value = trailNames[0];
-        showTrailData(trailNames[0]);
-        VertexEditor.selectTrail(trailNames[0]);
+        const first = trailNames.find(hasElev) || trailNames[0];
+        selector.value = first;
+        showTrailData(first);
+        VertexEditor.selectTrail(first);
       }
       status('Ready — click and drag vertices to edit trails');
     } catch (err) {
@@ -281,8 +288,8 @@
 
       loadTrailsIntoApp(data);
 
-      // Only init editor if not in preprocess mode (will init after preprocessing)
-      if (!preprocessMode) {
+      // While a new DEM is being set up, the editor initializes after processing
+      if (!DemPanel.isOpen()) {
         initEditor(data);
       }
 
@@ -293,19 +300,20 @@
   }
 
   /**
-   * Load DEM from a URL string OR an ArrayBuffer (serverless mode).
-   * ALL DEMs go through the same preprocessing pipeline:
-   *   - Small DEMs: auto-process immediately using full extent (no panel)
-   *   - Large DEMs: show interactive panel, wait for trails to define ROI
+   * Load a DEM from a URL, File/Blob, or ArrayBuffer.
+   * opts.auto: process the full extent with detected settings, no panel
+   * (used for the bundled demo DEM).
    */
-  async function loadDemFromSource(url, buffer, fileName, fileSize) {
+  async function loadDemFromSource(url, fileOrBuffer, fileName, fileSize, opts = {}) {
     try {
-      console.log('[app] loadDemFromSource:', url || '(buffer)', fileName, fileSize);
+      console.log('[app] loadDemFromSource:', url || '(file)', fileName, fileSize);
       const label = fileName || (url ? decodeURIComponent(url.split('path=')[1] || url) : 'DEM');
-      let size = fileSize || (buffer ? buffer.byteLength : 0);
+      let size = fileSize || (fileOrBuffer ? (fileOrBuffer.size || fileOrBuffer.byteLength || 0) : 0);
+      lastDemSource = { url, fileOrBuffer, fileName, fileSize };
+      if (DemPanel.isOpen()) cancelDemPanel();
 
       // If we have a URL but no size info, probe the server for content-length
-      if (size === 0 && url && !buffer) {
+      if (size === 0 && url && !fileOrBuffer) {
         try {
           console.log('[app] Probing file size via HEAD...');
           const ac = new AbortController();
@@ -329,179 +337,215 @@
         status('Found cached preprocessed data — loading...');
         try {
           await enterAppModeFromCache(testId);
+          if (!opts.auto) {
+            Notice.show('dem-cached',
+              `Using terrain for ${label} that was processed earlier and kept in browser storage.`, {
+                level: 'info', timeout: 15000,
+                actions: [{ label: 'Reprocess', onClick: () => reprocessLastDem(testId) }]
+              });
+          }
           return;
         } catch (cacheErr) {
           if (cacheErr.message === 'CACHE_INCOMPLETE') {
             console.warn('[app] Cache was incomplete — falling through to fresh processing');
-            // Continue to fresh processing below
           } else {
             throw cacheErr;
           }
         }
       }
 
-      // Large DEMs: interactive preprocessing (user loads trails to define ROI)
-      if (DemPreprocessor.shouldPreprocess(size)) {
-        status('Large DEM detected (' + (size / 1e6).toFixed(0) + ' MB) — entering preprocessing mode...');
-        await enterPreprocessMode(buffer || url, fileName || label, size);
+      status('Reading DEM header...');
+      const info = await DemPreprocessor.loadHeader(fileOrBuffer || url, label, size);
+
+      if (opts.auto) {
+        if (info.error) throw new Error(info.error);
+        await processDem(info, { units: info.units.units, area: 'full' }, label);
         return;
       }
-
-      // Small DEMs: auto-preprocess using full extent (no panel needed)
-      status('Processing DEM (' + label + ')...');
-      await autoPreprocessSmallDem(buffer || url, fileName || label, size);
+      openDemPanel(label, info);
 
     } catch (err) {
       status('DEM load failed: ' + err.message);
       console.error('DEM load error:', err);
+      if (!opts.auto) Notice.show('dem-error', 'Could not load the DEM: ' + err.message, { level: 'error' });
+    }
+  }
+
+  async function reprocessLastDem(demId) {
+    if (!lastDemSource) return;
+    await CacheStore.clearDem(demId);
+    const s = lastDemSource;
+    loadDemFromSource(s.url, s.fileOrBuffer, s.fileName, s.fileSize);
+  }
+
+  function trailCountsForDem() {
+    const { inside } = DemPreprocessor.trailsInside(trailData);
+    return { inside: inside.length, total: trailData ? trailData.features.length : 0 };
+  }
+
+  function openDemPanel(label, info) {
+    const ext = DemPreprocessor.getExtentGeoJSON();
+    if (ext) TrailMap.showDemExtent(ext);
+    const counts = trailCountsForDem();
+    if (info.extent && counts.inside === 0) {
+      const b = info.extent;
+      try { TrailMap.getMap().fitBounds([[b.west, b.south], [b.east, b.north]], { padding: 40 }); } catch (e) {}
+    }
+    DemPanel.show({ fileName: label, info, trailCounts: counts }, {
+      onProcess: (settings) => processDem(info, settings, label),
+      onCancel: () => {
+        cancelDemPanel();
+        status('DEM load cancelled');
+      }
+    });
+    status(info.error ? 'This DEM needs converting before it can be used'
+                      : 'Check the DEM settings, then click Process DEM');
+  }
+
+  function cancelDemPanel() {
+    DemPanel.hide();
+    TrailMap.clearDemExtent();
+    DemPreprocessor.releaseMemory();
+    // releaseMemory forgets the active DEM id; restore it
+    if (cachedDemId) DemPreprocessor.setDemId(cachedDemId);
+  }
+
+  /**
+   * Run the pipeline for a DEM whose header is loaded.
+   * settings: { units: 'm'|'ft'|'usft', area: 'trails'|'full' }
+   */
+  async function processDem(info, settings, label) {
+    const prevCrs = Projection.getCrs();
+    const prevDemId = cachedDemId;
+    const demId = info.demId;
+    const panel = DemPanel.isOpen();
+    const step = (msg) => { status(msg); if (panel) DemPanel.setMessage(msg); };
+
+    try {
+      if (panel) DemPanel.setBusy(true, 'Reading elevation data...');
+      else status('Processing DEM (' + label + ')...');
+      DemPreprocessor.setVerticalUnits(settings.units);
+
+      const roi = settings.area === 'trails'
+        ? await DemPreprocessor.extractROI(trailData, 500)
+        : await DemPreprocessor.extractFullExtent();
+      const range = DemPreprocessor.elevationRange(roi);
+      if (!range) throw new Error('The processed area has no elevation values (all nodata).');
+
+      RoiSampler.loadFromRaster(roi, demId);
+      await DemPreprocessor.runPreprocessing({
+        onStep: (s, detail) => step(detail),
+        onTileProgress: (current, total, type) => {
+          const name = type === 'contours' ? 'Contour tiles' : 'Terrain tiles';
+          status(`${name}: ${current}/${total} (${Math.round(current / total * 100)}%)`);
+          if (panel) DemPanel.progress(current, total, name);
+        },
+        onComplete: () => status('Preprocessing complete')
+      });
+
+      DemPreprocessor.releaseMemory();
+      if (panel) DemPanel.hide();
+      TrailMap.clearDemExtent();
+      Notice.clear('dem-error');
+      demLoaded = true;
+      await enterAppModeFromCache(demId);
+      checkElevationUnits(range, settings.units, demId);
+    } catch (err) {
+      console.error('DEM processing error:', err);
+      Projection.setUtm(prevCrs.zone, prevCrs.south, prevCrs.datum);
+      if (prevDemId) {
+        if (!RoiSampler.isLoadedFor(prevDemId)) await RoiSampler.loadFromCache(prevDemId);
+      } else {
+        RoiSampler.release();
+        demLoaded = false;
+      }
+      status('DEM processing failed: ' + err.message);
+      if (panel && DemPanel.isOpen()) {
+        DemPanel.setBusy(false);
+        DemPanel.setMessage(err.message, 'error');
+      } else {
+        Notice.show('dem-error', 'DEM processing failed: ' + err.message, { level: 'error' });
+      }
+    }
+  }
+
+  /** Warn when the elevation range suggests the units choice was wrong. */
+  function checkElevationUnits(range, units, demId) {
+    const fmt = (m) => Math.round(m).toLocaleString();
+    if (range.max > 6200) {
+      Notice.show('dem-units',
+        `The highest point in this DEM came out at ${fmt(range.max)} m, above any summit in North America. ` +
+        (units === 'm' ? 'If the file stores feet, reprocess it with feet selected.' : 'Check the elevation units.'),
+        { level: 'warn', actions: [{ label: 'Reprocess', onClick: () => reprocessLastDem(demId) }] });
+    } else {
+      Notice.clear('dem-units');
     }
   }
 
   /**
-   * Auto-preprocess a small DEM using full extent (no interactive panel).
-   * Same pipeline as large DEMs but uses extractFullExtent() instead of extractROI().
+   * Warn (on the map, not just the console) when trails fall outside the
+   * processed terrain, and outline the area that was processed.
    */
-  async function autoPreprocessSmallDem(source, fileName, fileSize) {
-    // Step 1: Parse header
-    status('Parsing DEM header...');
-    const info = await DemPreprocessor.loadHeader(source, fileName, fileSize);
+  function checkTrailCoverage() {
+    if (!trailData || !hasTerrain()) return;
+    const missing = [], partial = [];
+    for (const name of trailNames) {
+      const e = VertexEditor.getElevations(name);
+      if (!e || e.length === 0) continue;
+      const nulls = e.filter(v => v == null).length;
+      if (nulls === e.length) missing.push(name);
+      else if (nulls > 0) partial.push(name);
+    }
+    if (missing.length === 0 && partial.length === 0) {
+      Notice.clear('coverage');
+      return;
+    }
 
-    // Step 2: Extract full extent as ROI (small DEM, so this is fine for memory)
-    status('Reading raster data...');
-    const roi = await DemPreprocessor.extractFullExtent();
-
-    // Load into RoiSampler immediately (with DEM id so it knows which DEM it holds)
-    const demId = DemPreprocessor.getDemId();
-    RoiSampler.loadFromRaster(roi, demId);
-
-    // Step 3: Run preprocessing pipeline (contours, aspect, terrain tiles)
-    status('Generating terrain tiles and contours...');
-    await DemPreprocessor.runPreprocessing({
-      onStep: (step, detail) => {
-        status(detail);
-      },
-      onTileProgress: (current, total, type) => {
-        const pct = Math.round(current / total * 100);
-        status(`${type === 'contours' ? 'Contour' : 'Terrain'} tiles: ${current}/${total} (${pct}%)`);
-      },
-      onComplete: () => {
-        status('Preprocessing complete');
-      }
+    const b = RoiSampler.getBounds();
+    TrailMap.showDemExtent({
+      type: 'Feature', properties: { class: 'dem-extent' },
+      geometry: { type: 'Polygon', coordinates: [[
+        [b.west, b.south], [b.east, b.south], [b.east, b.north], [b.west, b.north], [b.west, b.south]
+      ]] }
     });
 
-    // Step 4: Release full DEM, enter app mode from cache
-    DemPreprocessor.releaseMemory();
-    cachedDemId = DemPreprocessor.getDemId();
-    demLoaded = true;
-
-    await enterAppModeFromCache(cachedDemId);
-  }
-
-  // ═══════════════════════════════════════════════
-  //  PREPROCESSING PIPELINE
-  // ═══════════════════════════════════════════════
-
-  async function enterPreprocessMode(source, fileName, fileSize) {
-    preprocessMode = true;
-    showPreprocessPanel(true);
-
-    try {
-      // Step 1: Parse header only (near-zero memory)
-      updatePreprocessUI('loading-header');
-      const info = await DemPreprocessor.loadHeader(source, fileName, fileSize);
-      const extent = DemPreprocessor.getExtentGeoJSON();
-      if (extent) {
-        TrailMap.showDemExtent(extent);
-        // Fit map to DEM extent
-        const b = info.extent;
-        if (b) {
-          try {
-            TrailMap.getMap().fitBounds([[b.west, b.south], [b.east, b.north]], { padding: 40 });
-          } catch (e) {}
-        }
-      }
-
-      updatePreprocessUI('header-loaded', {
-        width: info.width, height: info.height,
-        sizeMB: (info.width * info.height * 4 / 1e6).toFixed(0)
-      });
-
-      // Step 2: Wait for trails to be loaded (if not already)
-      if (!trailData || trailData.features.length === 0) {
-        updatePreprocessUI('waiting-trails');
-        // The Process button won't be enabled until trails are loaded
-        // (loadTrailsIntoApp calls updatePreprocessUI when preprocessMode=true)
-        return;
-      }
-
-      // Trails already loaded — enable process button
-      updatePreprocessUI('trails-loaded');
-
-    } catch (err) {
-      status('Preprocessing failed: ' + err.message);
-      console.error('Preprocess error:', err);
-      preprocessMode = false;
-      showPreprocessPanel(false);
+    const list = (names) => names.slice(0, 4).join(', ') + (names.length > 4 ? `, and ${names.length - 4} more` : '');
+    const lines = [];
+    let level = 'warn';
+    if (missing.length === trailNames.length) {
+      level = 'error';
+      lines.push('None of the loaded trails are inside the processed terrain (dashed outline), so they have no elevations.');
+      lines.push('Load a DEM that covers them, or check that the trails and DEM are for the same area.');
+    } else {
+      if (missing.length) lines.push(`${missing.length} trail${missing.length > 1 ? 's are' : ' is'} outside the processed terrain (dashed outline): ${list(missing)}.`);
+      if (partial.length) lines.push(`${partial.length} trail${partial.length > 1 ? 's run' : ' runs'} partly outside it: ${list(partial)}.`);
     }
-  }
-
-  async function runPreprocessPipeline() {
-    if (!trailData) return;
-
-    try {
-      // Step 3: Extract ROI
-      updatePreprocessUI('extracting-roi');
-      status('Extracting region of interest from DEM...');
-      const roi = await DemPreprocessor.extractROI(trailData, 500);
-      const roiSizeMB = (roi.width * roi.height * 4 / 1e6).toFixed(1);
-      status(`ROI extracted: ${roi.width}x${roi.height} pixels (${roiSizeMB} MB)`);
-
-      // Load ROI into RoiSampler immediately (for elevation sampling during app mode)
-      const ppDemId = DemPreprocessor.getDemId();
-      RoiSampler.loadFromRaster(roi, ppDemId);
-
-      // Step 4: Run preprocessing pipeline (contours, aspect, terrain)
-      updatePreprocessUI('processing');
-      await DemPreprocessor.runPreprocessing({
-        onStep: (step, detail) => {
-          status(detail);
-          updatePreprocessUI('step', { step });
-        },
-        onTileProgress: (current, total, type) => {
-          const pct = Math.round(current / total * 100);
-          status(`${type === 'contours' ? 'Contour' : 'Terrain'} tiles: ${current}/${total} (${pct}%)`);
-          updatePreprocessProgress(current, total);
-        },
-        onComplete: () => {
-          status('Preprocessing complete');
-        }
-      });
-
-      // Step 5: Release the full DEM and enter app mode
-      DemPreprocessor.releaseMemory();
-      cachedDemId = ppDemId;
-      demLoaded = true;
-      preprocessMode = false;
-      showPreprocessPanel(false);
-      TrailMap.clearDemExtent();
-
-      await enterAppModeFromCache(cachedDemId);
-
-    } catch (err) {
-      status('Preprocessing failed: ' + err.message);
-      console.error('Preprocess error:', err);
-      preprocessMode = false;
-      showPreprocessPanel(false);
-    }
+    Notice.show('coverage', lines.join('\n'), {
+      level,
+      actions: [{ label: 'Show terrain area', onClick: () => {
+        try { TrailMap.getMap().fitBounds([[b.west, b.south], [b.east, b.north]], { padding: 40 }); } catch (e) {}
+      } }]
+    });
   }
 
   /**
    * Enter app mode from cached preprocessed data.
    */
   async function enterAppModeFromCache(demId) {
-    cachedDemId = demId;
-
     status('Loading cached terrain data...');
+
+    // Switch to the DEM's working UTM zone. Caches from before per-DEM zones
+    // were all built in NAD83 / UTM 10N. A just-processed DEM whose metadata
+    // could not be stored keeps the zone it was processed in.
+    const meta = await CacheStore.getMetadata(demId);
+    if (meta && meta.crs) {
+      Projection.setUtm(meta.crs.zone, meta.crs.south, meta.crs.datum);
+    } else if (!RoiSampler.isLoadedFor(demId)) {
+      Projection.setUtm(10, false, 'NAD83');
+    }
+    cachedDemId = demId;
+    DemPreprocessor.setDemId(demId);
+    Notice.clear('coverage');
 
     // Load ROI raster into RoiSampler (for point elevation sampling)
     // Always load the correct DEM's ROI — don't skip just because some other DEM is loaded
@@ -536,59 +580,6 @@
     const roiRaster = RoiSampler.getFullRaster();
     const memMB = roiRaster ? (roiRaster.data.byteLength / 1e6).toFixed(1) : '?';
     status(`Ready — working from cached terrain data (~${memMB} MB in memory)`);
-  }
-
-  // ── Preprocess UI helpers ──
-
-  function showPreprocessPanel(show) {
-    const panel = document.getElementById('preprocess-panel');
-    if (panel) panel.classList.toggle('hidden', !show);
-  }
-
-  function updatePreprocessUI(state, info) {
-    const ppStatus = document.getElementById('pp-status');
-    const ppDem = document.getElementById('pp-dem-status');
-    const ppTrails = document.getElementById('pp-trails-status');
-    const ppProcess = document.getElementById('pp-process-status');
-    const btnStart = document.getElementById('btn-pp-start');
-    const progressWrap = document.getElementById('pp-progress');
-
-    switch (state) {
-      case 'loading-header':
-        if (ppDem) ppDem.textContent = 'Parsing...';
-        break;
-      case 'header-loaded':
-        if (ppDem) ppDem.textContent = `${info.width}x${info.height} (${info.sizeMB} MB uncompressed)`;
-        if (ppTrails) ppTrails.textContent = trailData ? `${trailData.features.length} trails loaded` : 'Waiting...';
-        break;
-      case 'waiting-trails':
-        if (ppTrails) ppTrails.textContent = 'Load trails to define processing region';
-        if (ppStatus) ppStatus.textContent = 'Load trails to define the processing region';
-        break;
-      case 'trails-loaded':
-        if (ppTrails) ppTrails.textContent = `${trailData.features.length} trails loaded`;
-        if (btnStart) btnStart.disabled = false;
-        if (ppStatus) ppStatus.textContent = 'Ready to process. Click Process to begin.';
-        break;
-      case 'extracting-roi':
-        if (btnStart) btnStart.disabled = true;
-        if (ppProcess) ppProcess.textContent = 'Extracting ROI...';
-        break;
-      case 'processing':
-        if (ppProcess) ppProcess.textContent = 'Processing...';
-        if (progressWrap) progressWrap.classList.remove('hidden');
-        break;
-      case 'step':
-        if (ppProcess) ppProcess.textContent = info.step;
-        break;
-    }
-  }
-
-  function updatePreprocessProgress(current, total) {
-    const fill = document.getElementById('pp-progress-fill');
-    const text = document.getElementById('pp-progress-text');
-    if (fill) fill.style.width = Math.round(current / total * 100) + '%';
-    if (text) text.textContent = `${current} / ${total}`;
   }
 
   // ==== Event handlers ====
@@ -636,8 +627,8 @@
 
   // Load DEM button — passes fileSize for preprocessing decision
   document.getElementById('btn-load-dem').addEventListener('click', () => {
-    FilePicker.showDemPicker((url, buffer, fileName, fileSize) => {
-      loadDemFromSource(url, buffer, fileName, fileSize);
+    FilePicker.showDemPicker((url, file, fileName, fileSize) => {
+      loadDemFromSource(url, file, fileName, fileSize);
     });
   });
 
@@ -724,7 +715,7 @@
       return;
     }
     // Check for any DEM source (ROI or full)
-    const hasDem = (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded()) || DemSampler.isLoaded();
+    const hasDem = hasTerrain();
     if (!hasDem) {
       status('Load a DEM first');
       return;
@@ -759,7 +750,7 @@
       status('Select a specific trail first');
       return;
     }
-    const hasDem = (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded()) || DemSampler.isLoaded();
+    const hasDem = hasTerrain();
     if (!hasDem) {
       status('Load a DEM first');
       return;
@@ -838,7 +829,7 @@
       VertexEditor.selectTrail(routeName);
       TrailMap.updateTrailColors(trailData);
 
-      const hasDem = (typeof RoiSampler !== 'undefined' && RoiSampler.isLoaded()) || DemSampler.isLoaded();
+      const hasDem = hasTerrain();
       if (hasDem) {
         await VertexEditor.loadElevations(trailData);
         showTrailData(routeName);
@@ -874,44 +865,6 @@
     StatsPanel.clear();
     status(`Route "${name}" deleted`);
   });
-
-  // ── Preprocess panel buttons ──
-  const btnPPStart = document.getElementById('btn-pp-start');
-  if (btnPPStart) {
-    btnPPStart.addEventListener('click', () => runPreprocessPipeline());
-  }
-  const btnPPSkip = document.getElementById('btn-pp-skip');
-  if (btnPPSkip) {
-    btnPPSkip.addEventListener('click', async () => {
-      preprocessMode = false;
-      showPreprocessPanel(false);
-      TrailMap.clearDemExtent();
-      status('Skipping ROI — processing full DEM extent...');
-      // Use full extent through the same pipeline (warning: may be slow/large for big DEMs)
-      try {
-        const roi = await DemPreprocessor.extractFullExtent();
-        const skipDemId = DemPreprocessor.getDemId();
-        RoiSampler.loadFromRaster(roi, skipDemId);
-
-        await DemPreprocessor.runPreprocessing({
-          onStep: (step, detail) => status(detail),
-          onTileProgress: (current, total, type) => {
-            const pct = Math.round(current / total * 100);
-            status(`${type === 'contours' ? 'Contour' : 'Terrain'} tiles: ${current}/${total} (${pct}%)`);
-          },
-          onComplete: () => status('Preprocessing complete')
-        });
-
-        DemPreprocessor.releaseMemory();
-        cachedDemId = skipDemId;
-        demLoaded = true;
-        await enterAppModeFromCache(cachedDemId);
-      } catch (err) {
-        status('Failed to process full DEM: ' + err.message);
-        console.error(err);
-      }
-    });
-  }
 
   // Callback when optimizer finishes
   window._onOptimizerDone = (newTrailName) => {

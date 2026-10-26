@@ -327,7 +327,9 @@ const FilePicker = (() => {
       <div class="file-group">
         <div class="file-group-label">Select a GeoTIFF DEM file from your computer</div>
         <p style="color: #999; font-size: 13px; margin: 8px 0 16px;">
-          Select a .tif or .tiff elevation raster. Large files (50+ MB) may take a moment to load.
+          Select a .tif or .tiff elevation raster in UTM, lat/long, or another EPSG
+          projection (State Plane, Albers, ...). Only the parts you process are read,
+          so large lidar files are fine.
         </p>
         <label class="file-upload-btn">
           <input type="file" accept=".tif,.tiff" id="browser-dem-input" style="display:none">
@@ -336,19 +338,12 @@ const FilePicker = (() => {
       </div>`;
 
     const input = document.getElementById('browser-dem-input');
-    input.addEventListener('change', async () => {
+    input.addEventListener('change', () => {
       const file = input.files[0];
       if (!file) return;
-      try {
-        body().innerHTML = '<div class="loading-spinner">Reading ' + file.name +
-          ' (' + (file.size / 1024 / 1024).toFixed(1) + ' MB)...</div>';
-        const buffer = await file.arrayBuffer();
-        close();
-        // Pass ArrayBuffer as 2nd arg, filename as 3rd, fileSize as 4th
-        onSelect(null, buffer, file.name, file.size);
-      } catch (err) {
-        body().innerHTML = '<div class="loading-spinner">Error: ' + err.message + '</div>';
-      }
+      close();
+      // Pass the File itself (read lazily), filename, and size
+      onSelect(null, file, file.name, file.size);
     });
   }
 

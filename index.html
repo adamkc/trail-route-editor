@@ -184,36 +184,45 @@
     </div>
   </div>
 
-  <!-- Preprocess panel (shown for large DEMs) -->
-  <div id="preprocess-panel" class="preprocess-panel hidden">
+  <!-- DEM setup panel (shown after picking a DEM) -->
+  <div id="dem-panel" class="preprocess-panel hidden">
     <div class="preprocess-header">
-      <h3>DEM Preprocessing</h3>
-      <p id="pp-status">Large DEM detected — processing terrain data for your trail area.</p>
+      <h3>DEM setup <span id="dem-panel-file" class="dem-panel-file"></span></h3>
     </div>
-    <div class="preprocess-steps">
-      <div class="preprocess-step">
-        <span class="step-num">1</span>
-        <span>Load DEM (header only)</span>
-        <span class="step-status" id="pp-dem-status"></span>
+    <div class="dem-grid">
+      <div class="dem-label">Coordinate system</div>
+      <div>
+        <span id="dem-crs" class="dem-value"></span>
+        <span id="dem-crs-note" class="dem-note"></span>
+        <pre id="dem-gdal-hint" class="dem-gdal-hint hidden"></pre>
       </div>
-      <div class="preprocess-step">
-        <span class="step-num">2</span>
-        <span>Load trails (defines ROI)</span>
-        <span class="step-status" id="pp-trails-status"></span>
+      <div class="dem-label">Raster</div>
+      <div id="dem-size" class="dem-value"></div>
+      <label class="dem-label" for="dem-units">Elevation units</label>
+      <div>
+        <select id="dem-units">
+          <option value="m">Meters</option>
+          <option value="ft">International feet</option>
+          <option value="usft">US survey feet</option>
+        </select>
+        <span id="dem-units-hint" class="dem-note"></span>
       </div>
-      <div class="preprocess-step">
-        <span class="step-num">3</span>
-        <span>Process terrain data</span>
-        <span class="step-status" id="pp-process-status"></span>
+      <div class="dem-label">Processing area</div>
+      <div class="dem-area">
+        <label><input type="radio" name="dem-area" value="trails" id="dem-area-trails">
+          Around trails (500 m buffer) <span id="dem-area-trails-hint" class="dem-note"></span></label>
+        <label><input type="radio" name="dem-area" value="full" id="dem-area-full">
+          Full DEM <span id="dem-area-full-hint" class="dem-note"></span></label>
       </div>
     </div>
+    <div id="dem-panel-msg" class="dem-panel-msg"></div>
     <div class="preprocess-progress hidden" id="pp-progress">
       <div class="opt-progress-bar"><div class="opt-progress-fill" id="pp-progress-fill"></div></div>
       <div class="opt-progress-text" id="pp-progress-text"></div>
     </div>
     <div class="preprocess-actions">
-      <button id="btn-pp-start" class="opt-btn opt-btn-primary" disabled>Process</button>
-      <button id="btn-pp-skip" class="opt-btn">Skip (use full DEM)</button>
+      <button id="btn-dem-process" class="opt-btn opt-btn-primary">Process DEM</button>
+      <button id="btn-dem-cancel" class="opt-btn">Cancel</button>
     </div>
   </div>
 
@@ -222,6 +231,7 @@
     <!-- Map — full width -->
     <div id="map-container">
       <div id="map"></div>
+      <div id="notice-area"></div>
       <div id="elev-tooltip" class="tooltip hidden"></div>
     </div>
 
@@ -307,8 +317,10 @@
   </div>
 
   <!-- App modules -->
+  <script src="js/notice.js"></script>
   <script src="js/file-picker.js"></script>
   <script src="js/projection.js"></script>
+  <script src="js/dem-crs.js"></script>
   <script src="js/cache-store.js"></script>
   <script src="js/dem-sampler.js"></script>
   <script src="js/roi-sampler.js"></script>
@@ -328,6 +340,7 @@
   <script src="js/optimizer-ui.js"></script>
   <script src="js/map.js"></script>
   <script src="js/dem-preprocessor.js"></script>
+  <script src="js/dem-panel.js"></script>
   <script src="js/app.js"></script>
 
   <!-- GoatCounter analytics -->

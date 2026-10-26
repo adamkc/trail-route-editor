@@ -629,16 +629,11 @@ const TrailMap = (() => {
   }
 
   function showBasemap(type) {
-    if (type === 'satellite') {
-      map.setLayoutProperty('satellite-layer', 'visibility', 'visible');
-      if (map.getLayer('hillshade-layer')) map.setLayoutProperty('hillshade-layer', 'visibility', 'none');
-      if (map.getLayer('native-hillshade')) map.setLayoutProperty('native-hillshade', 'visibility', 'none');
-      if (map.getLayer('hillshade-base')) map.setLayoutProperty('hillshade-base', 'visibility', 'none');
-    } else {
-      map.setLayoutProperty('satellite-layer', 'visibility', 'none');
-      if (map.getLayer('hillshade-layer')) map.setLayoutProperty('hillshade-layer', 'visibility', 'visible');
-      if (map.getLayer('native-hillshade')) map.setLayoutProperty('native-hillshade', 'visibility', 'visible');
-      if (map.getLayer('hillshade-base')) map.setLayoutProperty('hillshade-base', 'visibility', 'visible');
+    currentBasemap = type;
+    const hs = type === 'satellite' ? 'none' : 'visible';
+    map.setLayoutProperty('satellite-layer', 'visibility', type === 'satellite' ? 'visible' : 'none');
+    for (const id of ['hillshade-layer', 'native-hillshade', 'hillshade-base', 'roi-mask']) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', hs);
     }
   }
 
@@ -697,6 +692,8 @@ const TrailMap = (() => {
 
   let _tiledContourDemId = null;
   let _vectorContourDebounce = null;
+  let _contourListenersAdded = false;
+  let currentBasemap = 'hillshade';
 
   /**
    * Set up tiled contour layers from cached vector tiles.
@@ -719,8 +716,10 @@ const TrailMap = (() => {
     }
 
     // Load vector tiles for current viewport
-    map.on('moveend', () => loadVectorContoursForViewport());
-    map.on('zoomend', () => loadVectorContoursForViewport());
+    if (!_contourListenersAdded) {
+      map.on('moveend', () => loadVectorContoursForViewport());
+      _contourListenersAdded = true;
+    }
     loadVectorContoursForViewport();
   }
 
@@ -790,9 +789,9 @@ const TrailMap = (() => {
       return { data: FLAT_TERRAIN_PNG };
     });
 
-    // Get bounds from cached metadata
+    // Terrain covers only the processed area, not the whole DEM footprint
     const meta = await CacheStore.getMetadata(demId);
-    const demBounds = meta ? (meta.demExtent || meta.roiBounds) : null;
+    const demBounds = meta ? (meta.roiBounds || meta.demExtent) : null;
 
     const sourceOpts = {
       type: 'raster-dem',
@@ -814,6 +813,8 @@ const TrailMap = (() => {
     if (map.getLayer('native-hillshade')) map.removeLayer('native-hillshade');
     if (map.getLayer('hillshade-base')) map.removeLayer('hillshade-base');
     if (map.getSource('hillshade-base-src')) map.removeSource('hillshade-base-src');
+    if (map.getLayer('roi-mask')) map.removeLayer('roi-mask');
+    if (map.getSource('roi-mask-src')) map.removeSource('roi-mask-src');
     if (map.getSource('dem-hillshade')) map.removeSource('dem-hillshade');
 
     map.addSource('dem-hillshade', { ...sourceOpts });
@@ -859,6 +860,31 @@ const TrailMap = (() => {
           'hillshade-illumination-anchor': 'viewport'
         }
       }, insertBefore);
+
+      // Terrain tiles that straddle the processed area carry edge-extended
+      // values beyond it; cover that with the background color.
+      const { west: w, south: s, east: e, north: n } = demBounds;
+      map.addSource('roi-mask-src', {
+        type: 'geojson',
+        data: {
+          type: 'Feature',
+          geometry: {
+            type: 'Polygon',
+            coordinates: [
+              [[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]],
+              [[w, s], [w, n], [e, n], [e, s], [w, s]]
+            ]
+          }
+        }
+      });
+      map.addLayer({
+        id: 'roi-mask',
+        type: 'fill',
+        source: 'roi-mask-src',
+        paint: { 'fill-color': '#1a1a2e' }
+      }, insertBefore);
+
+      showBasemap(currentBasemap);
     }
 
     map.setTerrain({ source: 'dem-terrain', exaggeration });
