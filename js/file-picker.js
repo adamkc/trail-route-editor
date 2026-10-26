@@ -310,7 +310,7 @@ const FilePicker = (() => {
           close();
           const url = '/api/file?path=' + encodeURIComponent(el.dataset.path);
           const fileName = el.dataset.name || el.dataset.path.split('/').pop();
-          const fileSizeBytes = parseFloat(el.dataset.size || '0') * 1024 * 1024;
+          const fileSizeBytes = Math.round(parseFloat(el.dataset.size || '0') * 1024 * 1024);
           onSelect(url, null, fileName, fileSizeBytes);
         });
       });

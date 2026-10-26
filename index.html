@@ -89,17 +89,17 @@
             <div class="splash-step">
               <span class="splash-step-num">1</span>
               <div>
-                <b>Load a DEM</b> &mdash; Click <em>Load DEM</em> and select a GeoTIFF elevation raster.
-                The app generates a hillshade, contour lines, and 3D terrain from this file.
-                Cropped DEMs covering just your project area work best.
+                <b>Get terrain</b> &mdash; In the US, click <em>Get Terrain</em> to download USGS elevation
+                (1&nbsp;m lidar where available) for your trails or the map view. Or click <em>Load DEM</em> and pick
+                any GeoTIFF: UTM, lat/long, or State Plane, in meters or feet. The app builds a hillshade,
+                contours, and 3D terrain from it.
               </div>
             </div>
             <div class="splash-step">
               <span class="splash-step-num">2</span>
               <div>
-                <b>Load or draw trails</b> &mdash; Click <em>Load Trails</em> to import existing routes
-                (GeoJSON, KML, or GeoPackage with local server), or click <em>New Route</em> to draw
-                one from scratch by clicking on the map.
+                <b>Load or draw trails</b> &mdash; Click <em>Load Trails</em> to import GPX, GeoJSON, KML/KMZ,
+                or a zipped shapefile, or click <em>New Route</em> to draw one by clicking on the map.
               </div>
             </div>
             <div class="splash-step">
@@ -119,7 +119,8 @@
             <div class="splash-step">
               <span class="splash-step-num">5</span>
               <div>
-                <b>Export</b> &mdash; Download your edited trails as GeoJSON or KML.
+                <b>Save and export</b> &mdash; Work is saved in this browser automatically. Use <em>Save</em>
+                to download a project file, or export trails as GeoJSON, KML, or GPX.
               </div>
             </div>
           </div>
@@ -167,8 +168,8 @@
             </div>
             <div class="splash-tip">
               <span class="splash-tip-icon">&#x26A1;</span>
-              <div><b>Contours are cached</b> &mdash; First generation takes a few seconds. Subsequent loads
-              of the same DEM are instant.</div>
+              <div><b>Terrain is cached</b> &mdash; Processing a DEM takes a few seconds; loading the same
+              file again is instant. <em>Storage</em> shows what is kept and lets you delete it.</div>
             </div>
             <div class="splash-tip">
               <span class="splash-tip-icon">&#x2328;</span>
@@ -178,8 +179,9 @@
             </div>
             <div class="splash-tip">
               <span class="splash-tip-icon">&#x1F4E1;</span>
-              <div><b>Works offline</b> &mdash; Once loaded, everything runs in your browser. No data is sent
-              to any server. The local Python server is only needed for GeoPackage files and caching.</div>
+              <div><b>Your files stay on your computer</b> &mdash; Trails and DEMs are processed in your browser
+              and never uploaded. Get Terrain sends only the area's bounding box to USGS. The local Python
+              server is only needed for GeoPackage files.</div>
             </div>
           </div>
         </div>
