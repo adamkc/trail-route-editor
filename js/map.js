@@ -3,7 +3,6 @@
  */
 const TrailMap = (() => {
   let map = null;
-  let hillshadeBounds = null;
 
   // Trail colors from SimplifyTrail.R
   const TRAIL_COLORS = {
@@ -34,23 +33,9 @@ const TrailMap = (() => {
   }
 
   async function init() {
-    // Load hillshade bounds
-    try {
-      const resp = await fetch('data/hillshade_bounds.json');
-      hillshadeBounds = await resp.json();
-    } catch (e) {
-      console.warn('No hillshade bounds found:', e);
-    }
-
-    // Compute center from hillshade bounds or default
-    let center = [-123.1, 40.7]; // approximate default
-    let zoom = 14;
-    if (hillshadeBounds) {
-      center = [
-        (hillshadeBounds.west + hillshadeBounds.east) / 2,
-        (hillshadeBounds.south + hillshadeBounds.north) / 2
-      ];
-    }
+    // Starts over the demo area; loading trails or a DEM fits the view to them
+    const center = [-123.08, 40.713];
+    const zoom = 12.5;
 
     map = new maplibregl.Map({
       container: 'map',
@@ -138,26 +123,6 @@ const TrailMap = (() => {
       source: 'satellite',
       layout: { visibility: 'none' }
     });
-
-    // Add hillshade
-    if (hillshadeBounds) {
-      map.addSource('hillshade', {
-        type: 'image',
-        url: 'data/hillshade.png',
-        coordinates: [
-          [hillshadeBounds.west, hillshadeBounds.north],
-          [hillshadeBounds.east, hillshadeBounds.north],
-          [hillshadeBounds.east, hillshadeBounds.south],
-          [hillshadeBounds.west, hillshadeBounds.south]
-        ]
-      });
-      map.addLayer({
-        id: 'hillshade-layer',
-        type: 'raster',
-        source: 'hillshade',
-        paint: { 'raster-opacity': 0.90, 'raster-contrast': 0.20 }
-      });
-    }
 
     // Contour lines (populated later by ContourGenerator)
     map.addSource('contours-minor', {

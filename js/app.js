@@ -116,7 +116,7 @@
 
     try {
       status('Loading DEM...');
-      await loadDemFromSource('data/dem_cropped.tif', null, 'dem_cropped.tif', 0, { auto: true });
+      await loadDemFromSource('demo/demo_dem.tif', null, 'demo_dem.tif', 0, { auto: true });
     } catch (err) {
       console.warn('Default DEM load:', err);
     }
