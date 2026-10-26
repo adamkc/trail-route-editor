@@ -694,6 +694,25 @@ const VertexEditor = (() => {
     return frozenSets[trailName] ? frozenSets[trailName].size : 0;
   }
 
+  /** Frozen vertex indices for all trails, as { trailName: [indices] }. */
+  function getFrozenState() {
+    const out = {};
+    for (const [name, set] of Object.entries(frozenSets)) {
+      if (set.size) out[name] = [...set].sort((a, b) => a - b);
+    }
+    return out;
+  }
+
+  function setFrozenState(state) {
+    frozenSets = {};
+    for (const [name, idx] of Object.entries(state || {})) frozenSets[name] = new Set(idx);
+    if (map && trailData) {
+      vertexData = extractVertices(trailData);
+      const vertSrc = map.getSource('vertices');
+      if (vertSrc) vertSrc.setData(vertexData);
+    }
+  }
+
   function setStatus(msg) {
     const el = document.getElementById('status-bar');
     if (el) el.textContent = msg;
@@ -759,6 +778,7 @@ const VertexEditor = (() => {
     setTrailCoords, setTrailCoordsLive,
     addTrailFeature, removeTrailFeature,
     getTrailFeature, densifyTrail,
-    getFrozenArray, freezeByGrade, clearFrozen, getFrozenCount
+    getFrozenArray, freezeByGrade, clearFrozen, getFrozenCount,
+    getFrozenState, setFrozenState
   };
 })();

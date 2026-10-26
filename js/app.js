@@ -16,7 +16,11 @@
   let trailNames = [];
   let demLoaded = false;
   let cachedDemId = null;      // non-null when running from cache
+  let demLabel = null;         // file name of the active DEM
   let lastDemSource = null;    // { url, fileOrBuffer, fileName, fileSize } for "Reprocess"
+  let projectName = null;
+  let isDemo = false;          // showing the untouched demo trails
+  let lastSavedKey = null, demoKey = null, autosaveFailed = false;
 
   const hasTerrain = () => RoiSampler.isLoaded();
 
@@ -76,39 +80,201 @@
 
   selector = document.getElementById('trail-selector');
 
-  // ---- 3. Load default trail data ----
+  // ---- 3. Restore the last session, or show the demo ----
+  let restored = false;
   try {
-    status('Loading trail data...');
-    const trailResp = await fetch('data/trails.geojson');
-    if (!trailResp.ok) throw new Error('HTTP ' + trailResp.status);
-    trailData = (await TrailImport.normalize(await trailResp.json())).data;
-    loadTrailsIntoApp(trailData);
+    const saved = await SessionStore.load();
+    const n = saved && saved.trails && saved.trails.features ? saved.trails.features.length : 0;
+    if (saved && (n > 0 || saved.dem)) {
+      await restoreProject(saved);
+      restored = true;
+      const what = n > 0 ? `${n} trail${n === 1 ? '' : 's'}` : `terrain from ${saved.dem.label}, no trails yet`;
+      Notice.show('restored',
+        `Restored your last session${saved.name ? ` ("${saved.name}")` : ''}: ${what}, saved ${timeAgo(saved.savedAt)}.`,
+        { level: 'info', timeout: 15000, actions: [{ label: 'Start new project', onClick: () => newProject() }] });
+    }
   } catch (err) {
-    status('Default trails not found — use Load Trails to pick a file');
-    console.warn('Default trail load:', err);
+    console.warn('Session restore failed:', err);
+  }
+  if (!restored) await loadDemo();
+  startAutosave();
+
+  // ==== Project / session ====
+
+  async function loadDemo() {
+    try {
+      status('Loading demo trails...');
+      const trailResp = await fetch('data/trails.geojson');
+      if (!trailResp.ok) throw new Error('HTTP ' + trailResp.status);
+      trailData = (await TrailImport.normalize(await trailResp.json())).data;
+      loadTrailsIntoApp(trailData);
+      isDemo = true;
+    } catch (err) {
+      status('Default trails not found — use Load Trails to pick a file');
+      console.warn('Default trail load:', err);
+    }
+
+    try {
+      status('Loading DEM...');
+      await loadDemFromSource('data/dem_cropped.tif', null, 'dem_cropped.tif', 0, { auto: true });
+    } catch (err) {
+      console.warn('Default DEM load:', err);
+    }
+
+    // enterAppModeFromCache initializes the editor when a DEM loaded
+    if (trailData && !demLoaded) initEditor(trailData);
+    if (!demLoaded) status('Ready (no DEM) — use Load DEM to enable elevation');
+
+    if (isDemo) {
+      Notice.show('demo',
+        'This is a demo: the JC Trail network near Hayfork, California. Load your own DEM and trails to start, ' +
+        'or start an empty project.',
+        { level: 'info', actions: [{ label: 'Start new project', onClick: () => newProject() }] });
+    }
   }
 
-  // ---- 4. Load default DEM through unified preprocessing pipeline ----
-  try {
-    status('Loading DEM...');
-    await loadDemFromSource('data/dem_cropped.tif', null, 'dem_cropped.tif', 0, { auto: true });
-  } catch (err) {
-    status('Default DEM not found — use Load DEM to pick a file');
-    console.warn('Default DEM load:', err);
+  function timeAgo(iso) {
+    const s = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (!isFinite(s)) return 'earlier';
+    if (s < 90) return 'just now';
+    if (s < 5400) return Math.round(s / 60) + ' minutes ago';
+    if (s < 129600) return Math.round(s / 3600) + ' hours ago';
+    return Math.round(s / 86400) + ' days ago';
   }
 
-  // ---- 5. Initialize vertex editor + load elevations ----
-  // (If DEM loaded via unified pipeline, initEditor was already called inside enterAppModeFromCache.
-  //  Only need this for the case where no DEM loaded but trails exist.)
-  if (trailData && !demLoaded) {
+  function slug(s) {
+    return String(s).trim().replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'trails';
+  }
+
+  /** Everything needed to restore the current work. */
+  function snapshot() {
+    const td = VertexEditor.getTrailData() || trailData;
+    const m = TrailMap.getMap();
+    return {
+      format: 'trail-route-editor-project',
+      version: 1,
+      name: projectName,
+      savedAt: new Date().toISOString(),
+      isDemo,
+      trails: {
+        type: 'FeatureCollection',
+        features: (td ? td.features : []).map(f => ({ type: 'Feature', properties: f.properties, geometry: f.geometry }))
+      },
+      waypoints: Waypoints.getWaypointsGeoJSON(),
+      frozen: VertexEditor.getFrozenState(),
+      selected: selector.value,
+      dem: cachedDemId ? { demId: cachedDemId, label: demLabel || cachedDemId } : null,
+      view: { center: m.getCenter().toArray(), zoom: m.getZoom() }
+    };
+  }
+
+  function contentKey(s) {
+    return JSON.stringify([s.name, s.trails, s.waypoints, s.frozen, s.dem && s.dem.demId]);
+  }
+
+  async function restoreProject(p) {
+    projectName = p.name || null;
+    isDemo = !!p.isDemo;
+    Waypoints.clear();
+    TrailMap.removeLayers();
+    for (const id of ['coverage', 'demo', 'restore-dem']) Notice.clear(id);
+
+    const lines = (p.trails && p.trails.features) || [];
+    const points = (p.waypoints && p.waypoints.features) || [];
+    loadTrailsIntoApp({ type: 'FeatureCollection', features: [...lines, ...points] });
+    VertexEditor.setFrozenState(p.frozen);
+    if (p.selected && trailNames.includes(p.selected)) selector.value = p.selected;
+
+    const demId = p.dem && p.dem.demId;
+    let terrain = false;
+    if (demId && await CacheStore.hasCachedDem(demId)) {
+      try {
+        demLabel = p.dem.label;
+        await enterAppModeFromCache(demId);
+        demLoaded = terrain = true;
+      } catch (e) {
+        console.warn('[app] Could not restore terrain:', e);
+      }
+    }
+    if (!terrain) {
+      initEditor(trailData);
+      if (p.dem && !(cachedDemId && cachedDemId === demId)) {
+        Notice.show('restore-dem',
+          `This project's terrain ("${p.dem.label}") is not stored in this browser. Load that DEM again with Load DEM to get elevations.`,
+          { level: 'warn' });
+      }
+      if (!hasTerrain()) status('Ready (no DEM) — use Load DEM to enable elevation');
+    }
+    if (p.view && p.view.center) {
+      try { TrailMap.getMap().jumpTo({ center: p.view.center, zoom: p.view.zoom }); } catch (e) {}
+    }
+  }
+
+  async function newProject() {
+    const td = VertexEditor.getTrailData() || trailData;
+    const n = td ? td.features.length : 0;
+    if (n && !isDemo && !confirm(`Start a new project? The ${n} trail${n === 1 ? '' : 's'} currently loaded will be cleared ` +
+                                 '(use Save Project first to keep them).')) return;
+    clearTrails();
+    projectName = null;
+    isDemo = false;
+    for (const id of ['demo', 'coverage', 'restored', 'restore-dem', 'import']) Notice.clear(id);
+    await SessionStore.clear();
+    lastSavedKey = contentKey(snapshot());
+    status('New project — load or draw trails' + (hasTerrain() ? '' : ', and load a DEM'));
+  }
+
+  function clearTrails() {
+    Waypoints.clear();
+    TrailMap.removeLayers();
+    VertexEditor.setFrozenState({});
+    loadTrailsIntoApp({ type: 'FeatureCollection', features: [] });
     initEditor(trailData);
+    ProfileCharts.clear();
+    StatsPanel.clear();
+    TrailMap.clearGradeSegments();
   }
 
-  if (!demLoaded) {
-    status('Ready (no DEM) — use Load DEM to enable elevation');
+  function startAutosave() {
+    lastSavedKey = contentKey(snapshot());
+    demoKey = isDemo ? lastSavedKey : null;
+    setInterval(autosaveNow, 4000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') autosaveNow();
+    });
+    window.addEventListener('beforeunload', (e) => {
+      if (autosaveFailed && contentKey(snapshot()) !== lastSavedKey) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    });
   }
 
-  // (Legacy contour cache helpers removed — all DEMs now use unified preprocessing pipeline)
+  async function autosaveNow() {
+    if (!selector) return;
+    const s = snapshot();
+    const key = contentKey(s);
+    if (key === lastSavedKey) return;
+    if (isDemo && key !== demoKey) {
+      isDemo = false;
+      s.isDemo = false;
+      Notice.clear('demo');
+    }
+    if (isDemo) return;
+    try {
+      await SessionStore.save(s);
+      lastSavedKey = key;
+      if (autosaveFailed) Notice.clear('autosave');
+      autosaveFailed = false;
+    } catch (e) {
+      if (!autosaveFailed) {
+        Notice.show('autosave',
+          'This browser is not letting the page store data, so your work is not being saved automatically. ' +
+          'Use Save Project to keep it.', { level: 'warn' });
+      }
+      autosaveFailed = true;
+    }
+  }
 
   // ==== Dynamic loading functions ====
 
@@ -266,6 +432,18 @@
       data = normalized.data;
       const notes = normalized.notes;
 
+      const current = trailData ? trailData.features.length : 0;
+      if (!opts.append && current && !isDemo &&
+          !confirm(`Replace the ${current} trail${current === 1 ? '' : 's'} currently loaded? ` +
+                   '(Save Project first to keep them, or tick "Add to the trails already loaded".)')) {
+        status('Load cancelled');
+        return;
+      }
+      if (isDemo && !opts.append) {
+        isDemo = false;
+        Notice.clear('demo');
+      }
+
       if (opts.append && trailData && trailData.features.length) {
         const renamed = TrailImport.dedupeAgainst(trailNames, data);
         if (renamed) notes.push(`Renamed ${renamed} incoming trail${renamed > 1 ? 's' : ''} whose names were already in use.`);
@@ -336,6 +514,7 @@
         status('Found cached preprocessed data — loading...');
         try {
           await enterAppModeFromCache(testId);
+          demLabel = label;
           if (!opts.auto) {
             Notice.show('dem-cached',
               `Using terrain for ${label} that was processed earlier and kept in browser storage.`, {
@@ -420,6 +599,9 @@
     const panel = DemPanel.isOpen();
     const step = (msg) => { status(msg); if (panel) DemPanel.setMessage(msg); };
 
+    // Demo trails that this DEM does not cover are cleared once it is processed
+    const dropDemoTrails = isDemo && panel && trailCountsForDem().inside === 0;
+
     try {
       if (panel) DemPanel.setBusy(true, 'Reading elevation data...');
       else status('Processing DEM (' + label + ')...');
@@ -447,7 +629,19 @@
       TrailMap.clearDemExtent();
       Notice.clear('dem-error');
       demLoaded = true;
+      demLabel = label;
+      if (dropDemoTrails) {
+        clearTrails();
+        isDemo = false;
+        Notice.clear('demo');
+        Notice.show('demo-cleared', 'Cleared the demo trails, which are outside your DEM. Load your trails or draw a new route.',
+                    { level: 'info', timeout: 15000 });
+      }
       await enterAppModeFromCache(demId);
+      if (dropDemoTrails) {
+        const b = RoiSampler.getBounds();
+        try { TrailMap.getMap().fitBounds([[b.west, b.south], [b.east, b.north]], { padding: 40 }); } catch (e) {}
+      }
       checkElevationUnits(range, settings.units, demId);
     } catch (err) {
       console.error('DEM processing error:', err);
@@ -669,8 +863,52 @@
   function exportBaseName() {
     const d = new Date();
     const pad = (n) => String(n).padStart(2, '0');
-    return `trails_${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    return `${projectName ? slug(projectName) : 'trails'}_${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   }
+
+  // ── Project: new / open / save ──
+  document.getElementById('btn-new-project').addEventListener('click', () => newProject());
+
+  document.getElementById('btn-save-project').addEventListener('click', async () => {
+    if (!projectName) {
+      const first = trailNames[0];
+      const name = prompt('Project name:', first ? first.replace(/\s*\(.*\)$/, '') + ' project' : 'Trail project');
+      if (!name || !name.trim()) return;
+      projectName = name.trim();
+    }
+    const s = snapshot();
+    s.isDemo = false;
+    isDemo = false;
+    Notice.clear('demo');
+    Export.download(JSON.stringify(s), slug(projectName) + '.trailproject.json', 'application/json');
+    await autosaveNow();
+    status(`Saved project "${projectName}"`);
+  });
+
+  const projectInput = document.getElementById('project-file-input');
+  document.getElementById('btn-open-project').addEventListener('click', () => {
+    projectInput.value = '';
+    projectInput.click();
+  });
+  projectInput.addEventListener('change', async () => {
+    const file = projectInput.files[0];
+    if (!file) return;
+    try {
+      const p = JSON.parse(await file.text());
+      if (p.format !== 'trail-route-editor-project') {
+        throw new Error('Not a Trail Route Editor project file (for trail data, use Load Trails)');
+      }
+      const n = trailData ? trailData.features.length : 0;
+      if (n && !isDemo && !confirm(`Open "${p.name || file.name}"? The ${n} trail${n === 1 ? '' : 's'} currently loaded will be replaced.`)) return;
+      await restoreProject({ ...p, isDemo: false });
+      isDemo = false;
+      await autosaveNow();
+      Notice.show('project', `Opened project "${p.name || file.name}" (${(p.trails.features || []).length} trails).`,
+                  { level: 'info', timeout: 10000 });
+    } catch (err) {
+      Notice.show('project', 'Could not open project: ' + err.message, { level: 'error' });
+    }
+  });
 
   for (const [id, fn, ext] of [['btn-export', 'downloadGeoJSON', 'geojson'],
                                ['btn-export-kml', 'downloadKML', 'kml'],

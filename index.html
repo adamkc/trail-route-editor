@@ -30,6 +30,13 @@
       </select>
     </div>
     <div class="toolbar-group">
+      <label>Project:</label>
+      <button id="btn-new-project" title="Start an empty project (clears the trails on the map)">New</button>
+      <button id="btn-open-project" title="Open a saved .trailproject.json file">Open</button>
+      <button id="btn-save-project" title="Download the project (trails, waypoints, frozen vertices) as a file. Work is also saved in this browser automatically.">Save</button>
+      <input type="file" id="project-file-input" accept=".json,.trailproject.json" style="display:none">
+    </div>
+    <div class="toolbar-group">
       <label>Data:</label>
       <button id="btn-load-dem" title="Load a different DEM">Load DEM</button>
       <button id="btn-load-trails" title="Load trails from a project file">Load Trails</button>
@@ -323,6 +330,7 @@
   <script src="js/projection.js"></script>
   <script src="js/dem-crs.js"></script>
   <script src="js/cache-store.js"></script>
+  <script src="js/session-store.js"></script>
   <script src="js/dem-sampler.js"></script>
   <script src="js/roi-sampler.js"></script>
   <script src="js/contour-generator.js"></script>

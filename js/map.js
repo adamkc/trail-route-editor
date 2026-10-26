@@ -608,6 +608,8 @@ const TrailMap = (() => {
       const n = f.properties.Name || f.properties.name;
       if (n) names.add(n);
     }
+    // 'match' needs at least one label/output pair
+    if (names.size === 0) return '#888';
 
     const expr = ['match', ['coalesce', ['get', 'Name'], ['get', 'name'], '']];
     for (const name of names) {
