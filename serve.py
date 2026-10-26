@@ -10,11 +10,15 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_ROOT = os.path.abspath('..')
 
 
+SKIP_DIRS = {'node_modules', 'dist', 'dev-dist', '__pycache__', '_trash'}
+
+
 def find_files(root, extensions):
     """Walk project tree and return files matching extensions."""
     results = []
-    for dirpath, _, filenames in os.walk(root):
-        # Skip hidden dirs, web-editor/data dir, .git
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames
+                       if d not in SKIP_DIRS and not d.startswith('.')]
         rel = os.path.relpath(dirpath, root)
         if any(p.startswith('.') for p in rel.split(os.sep)):
             continue

@@ -73,7 +73,7 @@ Freeze specific vertices so they stay fixed during optimization:
 ### Route Optimizer
 Spring-mass physics simulation that reshapes a trail to meet a target grade:
 - **Target Grade** — the average grade the trail aims for (default 7%)
-- **Max Segment Grade** — hard cap on individual segment steepness (default 12%). The optimizer actively pushes vertices sideways along contours to prevent any segment from exceeding this limit.
+- **Max Segment Grade** — hard cap on individual segment steepness (default 15%). The optimizer actively pushes vertices sideways along contours to prevent any segment from exceeding this limit.
 - **Live animation** — watch the trail snake into shape on the map in real-time
 - **Creates a new trail** — the optimized result is added as "TrailName - Optimized" for side-by-side comparison
 - **Frozen vertices respected** — pinned sections (roads, fixed segments) stay in place; target elevations are computed piecewise between frozen anchor points
