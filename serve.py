@@ -127,12 +127,14 @@ class TrailEditorHandler(http.server.SimpleHTTPRequestHandler):
         self.send_error(404, 'Not found')
 
     def do_GET(self):
-        # API: list trail files (gpkg + geojson + kml)
+        # API: list trail files (gpkg + geojson + kml + gpx)
         if self.path == '/api/trails':
             gpkg_files = find_files(PROJECT_ROOT, {'.gpkg'})
             geojson_files = find_files(PROJECT_ROOT, {'.geojson'})
             kml_files = find_files(PROJECT_ROOT, {'.kml'})
-            self.send_json({'gpkg': gpkg_files, 'geojson': geojson_files, 'kml': kml_files})
+            gpx_files = find_files(PROJECT_ROOT, {'.gpx'})
+            self.send_json({'gpkg': gpkg_files, 'geojson': geojson_files,
+                            'kml': kml_files, 'gpx': gpx_files})
             return
 
         # API: list DEM files (tif)

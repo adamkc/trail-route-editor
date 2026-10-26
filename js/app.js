@@ -81,7 +81,7 @@
     status('Loading trail data...');
     const trailResp = await fetch('data/trails.geojson');
     if (!trailResp.ok) throw new Error('HTTP ' + trailResp.status);
-    trailData = await trailResp.json();
+    trailData = (await TrailImport.normalize(await trailResp.json())).data;
     loadTrailsIntoApp(trailData);
   } catch (err) {
     status('Default trails not found — use Load Trails to pick a file');
@@ -125,25 +125,8 @@
       console.log(`[app] Loaded ${pointFeatures.length} waypoints from import`);
     }
 
-    // Normalize geometries: flatten MultiLineString → LineString
-    // (GeoPackage exports often use MultiLineString even for single-part lines)
-    for (const f of lineFeatures) {
-      if (f.geometry && f.geometry.type === 'MultiLineString') {
-        // Concatenate all parts into a single LineString
-        const parts = f.geometry.coordinates;
-        if (parts.length === 1) {
-          f.geometry.type = 'LineString';
-          f.geometry.coordinates = parts[0];
-        } else {
-          // Multi-part: concatenate all segments into one continuous line
-          f.geometry.type = 'LineString';
-          f.geometry.coordinates = parts.reduce((acc, part) => acc.concat(part), []);
-        }
-        console.log(`[app] Converted MultiLineString "${f.properties.Name || f.properties.name || '?'}" → LineString (${f.geometry.coordinates.length} vertices)`);
-      }
-    }
-
-    // Work with line features only for trails
+    // Work with line features only for trails (TrailImport.normalize has
+    // already turned multi-part lines into LineStrings)
     data = { ...data, features: lineFeatures };
     trailData = data;
     trailNames = [];
@@ -254,8 +237,9 @@
 
   /**
    * Load trails from server paths OR directly from parsed GeoJSON data.
+   * opts.append adds them to the current trails instead of replacing them.
    */
-  async function loadTrailsFromSource(gpkgPath, geojsonPath, layerName, directData) {
+  async function loadTrailsFromSource(gpkgPath, geojsonPath, layerName, directData, opts = {}) {
     try {
       let data;
 
@@ -278,24 +262,39 @@
         data = await resp.json();
       }
 
-      if (!data.features || data.features.length === 0) {
-        status('No features found in file');
-        return;
+      const normalized = await TrailImport.normalize(data);
+      data = normalized.data;
+      const notes = normalized.notes;
+
+      if (opts.append && trailData && trailData.features.length) {
+        const renamed = TrailImport.dedupeAgainst(trailNames, data);
+        if (renamed) notes.push(`Renamed ${renamed} incoming trail${renamed > 1 ? 's' : ''} whose names were already in use.`);
+        data = { type: 'FeatureCollection', features: [...trailData.features, ...data.features] };
+      } else {
+        Waypoints.clear();
       }
 
       // Remove old map layers before adding new ones
       TrailMap.removeLayers();
+      Notice.clear('coverage');
 
       loadTrailsIntoApp(data);
+      if (notes.length) {
+        Notice.show('import', `${opts.fileName || 'Trail file'}:\n` + notes.join('\n'), { level: 'info', timeout: 20000 });
+      } else {
+        Notice.clear('import');
+      }
 
-      // While a new DEM is being set up, the editor initializes after processing
+      // While a new DEM is being set up, the editor initializes after processing.
+      // trailData (lines only) — `data` still includes the waypoint Points.
       if (!DemPanel.isOpen()) {
-        initEditor(data);
+        initEditor(trailData);
       }
 
     } catch (err) {
       status('Load failed: ' + err.message);
       console.error('Trail load error:', err);
+      Notice.show('import', 'Could not load trails: ' + err.message, { level: 'error' });
     }
   }
 
@@ -620,9 +619,9 @@
 
   // Load Trails button
   document.getElementById('btn-load-trails').addEventListener('click', () => {
-    FilePicker.showTrailPicker((gpkgPath, geojsonPath, layerName, directData) => {
-      loadTrailsFromSource(gpkgPath, geojsonPath, layerName, directData);
-    });
+    FilePicker.showTrailPicker((gpkgPath, geojsonPath, layerName, directData, opts) => {
+      loadTrailsFromSource(gpkgPath, geojsonPath, layerName, directData, opts);
+    }, { hasTrails: !!(trailData && trailData.features.length) });
   });
 
   // Load DEM button — passes fileSize for preprocessing decision
@@ -667,15 +666,23 @@
     }
   });
 
-  document.getElementById('btn-export').addEventListener('click', () => {
-    Export.downloadGeoJSON(VertexEditor.getTrailData());
-    status('Exported edited_trails.geojson');
-  });
+  function exportBaseName() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `trails_${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
 
-  document.getElementById('btn-export-kml').addEventListener('click', () => {
-    Export.downloadKML(VertexEditor.getTrailData());
-    status('Exported edited_trails.kml');
-  });
+  for (const [id, fn, ext] of [['btn-export', 'downloadGeoJSON', 'geojson'],
+                               ['btn-export-kml', 'downloadKML', 'kml'],
+                               ['btn-export-gpx', 'downloadGPX', 'gpx']]) {
+    document.getElementById(id).addEventListener('click', () => {
+      const data = VertexEditor.getTrailData();
+      if (!data || !data.features.length) { status('No trails to export'); return; }
+      const base = exportBaseName();
+      Export[fn](data, base);
+      status(`Exported ${base}.${ext}`);
+    });
+  }
 
   document.getElementById('btn-recenter').addEventListener('click', () => {
     TrailMap.recenter(trailData);

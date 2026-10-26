@@ -134,6 +134,15 @@ const DemCrs = (() => {
     return def;
   }
 
+  /** proj4 definition for an EPSG code (used for projected vector files). */
+  async function defForEpsg(code) {
+    if ([4326, 4269, 6318, 4152, 4617, 4759].includes(code)) return '+proj=longlat +datum=WGS84 +no_defs +type=crs';
+    const utm = utmFromEpsg(code);
+    if (utm && utm.datum === 'NAD27') throw new Error('NAD27 coordinates need a datum grid shift the browser cannot apply.');
+    if (utm) return Projection.utmDef(utm.zone, utm.south, utm.datum);
+    return resolveDef({ kind: 'projected', epsg: code });
+  }
+
   /**
    * Build forward/inverse transforms between the DEM's CRS and WGS84.
    * Returns { toWgs84([x,y]) -> [lng,lat], fromWgs84([lng,lat]) -> [x,y] }.
@@ -174,7 +183,7 @@ const DemCrs = (() => {
   }
 
   return {
-    describe, guessVerticalUnits, resolveDef, makeTransformer, gdalwarpHint, makeNodataTest,
+    describe, guessVerticalUnits, resolveDef, defForEpsg, makeTransformer, gdalwarpHint, makeNodataTest,
     UNIT_TO_M, UNIT_LABEL
   };
 })();

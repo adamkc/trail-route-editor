@@ -60,28 +60,41 @@ const FilePicker = (() => {
 
   /**
    * Show trail file picker.
-   * Callback signatures:
-   *   Server mode:    onSelect(gpkgPath, geojsonPath, layerName)
-   *   Serverless mode: onSelect(null, null, null, geojsonData)  — 4th arg is parsed GeoJSON
+   * Callback: onSelect(gpkgPath, geojsonPath, layerName, directData, opts)
+   *   Server mode:     paths for GeoPackage / GeoJSON, or directData for KML/GPX
+   *   Serverless mode: directData = parsed (not yet normalized) GeoJSON
+   *   opts: { append, fileName }
    */
-  async function showTrailPicker(onSelect) {
+  async function showTrailPicker(onSelect, { hasTrails } = {}) {
     const hasServer = await checkServer();
     if (hasServer) {
-      showTrailPickerServer(onSelect);
+      showTrailPickerServer(onSelect, hasTrails);
     } else {
-      showTrailPickerBrowser(onSelect);
+      showTrailPickerBrowser(onSelect, hasTrails);
     }
   }
 
+  function appendOptionHtml(hasTrails) {
+    return hasTrails ? `
+      <label class="splash-checkbox" style="margin: 0 0 12px;">
+        <input type="checkbox" id="trail-append"> Add to the trails already loaded (instead of replacing them)
+      </label>` : '';
+  }
+
+  function appendChecked() {
+    const el = document.getElementById('trail-append');
+    return !!(el && el.checked);
+  }
+
   // ── Server mode trail picker ──
-  async function showTrailPickerServer(onSelect) {
+  async function showTrailPickerServer(onSelect, hasTrails) {
     open('Load Trails');
 
     try {
       const resp = await fetch('/api/trails');
       const data = await resp.json();
 
-      let html = '';
+      let html = appendOptionHtml(hasTrails);
 
       // GPKG files (need layer selection)
       if (data.gpkg.length > 0) {
@@ -115,11 +128,12 @@ const FilePicker = (() => {
         html += '</div>';
       }
 
-      // KML files (convert to GeoJSON on load)
-      if (data.kml && data.kml.length > 0) {
-        html += '<div class="file-group"><div class="file-group-label">KML Files</div>';
-        for (const f of data.kml) {
-          html += `<div class="file-item" data-type="kml" data-path="${f.path}">
+      // KML and GPX files (converted to GeoJSON client-side)
+      for (const [key, label] of [['kml', 'KML Files'], ['gpx', 'GPX Files']]) {
+        if (!data[key] || data[key].length === 0) continue;
+        html += `<div class="file-group"><div class="file-group-label">${label}</div>`;
+        for (const f of data[key]) {
+          html += `<div class="file-item" data-type="${key}" data-path="${f.path}">
             <div>
               <div class="file-item-name">${f.name}</div>
               <div class="file-item-dir">${f.dir}</div>
@@ -137,24 +151,22 @@ const FilePicker = (() => {
         el.addEventListener('click', async () => {
           const type = el.dataset.type;
           const path = el.dataset.path;
+          const opts = { append: appendChecked(), fileName: path.split('/').pop() };
 
-          if (type === 'kml') {
-            // Fetch KML, convert to GeoJSON client-side, pass as direct data
+          if (type === 'kml' || type === 'gpx') {
             try {
               el.style.opacity = '0.5';
               const resp = await fetch('/api/file?path=' + encodeURIComponent(path));
-              const text = await resp.text();
-              const geojson = KmlUtils.kmlToGeoJSON(text);
-              console.log(`[KML] Converted ${path}: ${geojson.features.length} features`);
+              const geojson = TrailImport.parseText(await resp.text(), type);
               close();
-              onSelect(null, null, null, geojson);
+              onSelect(null, null, null, geojson, opts);
             } catch (err) {
               el.style.opacity = '1';
-              alert('Failed to load KML: ' + err.message);
+              alert('Failed to load ' + type.toUpperCase() + ': ' + err.message);
             }
           } else if (type === 'geojson') {
             close();
-            onSelect(null, path, null);
+            onSelect(null, path, null, null, opts);
           } else if (type === 'gpkg') {
             const layerDiv = document.getElementById(el.id + '-layers');
             if (layerDiv.style.display !== 'none') {
@@ -182,8 +194,9 @@ const FilePicker = (() => {
             layerDiv.querySelectorAll('.layer-item').forEach(lel => {
               lel.addEventListener('click', (e) => {
                 e.stopPropagation();
+                const opts = { append: appendChecked(), fileName: lel.dataset.layer };
                 close();
-                onSelect(lel.dataset.gpkg, null, lel.dataset.layer);
+                onSelect(lel.dataset.gpkg, null, lel.dataset.layer, null, opts);
               });
             });
           }
@@ -196,17 +209,19 @@ const FilePicker = (() => {
   }
 
   // ── Serverless mode trail picker (browser file input) ──
-  function showTrailPickerBrowser(onSelect) {
+  function showTrailPickerBrowser(onSelect, hasTrails) {
     open('Load Trails');
     body().innerHTML = `
       <div class="file-group">
         <div class="file-group-label">Select a trail file from your computer</div>
         <p style="color: #999; font-size: 13px; margin: 8px 0 16px;">
-          Supported formats: GeoJSON (.geojson, .json) and KML (.kml)<br>
-          GeoPackage (.gpkg) files require the local server.
+          GPX (GPS units, phone apps, Trail Router mobile), GeoJSON, KML/KMZ,
+          or a zipped shapefile (.zip containing .shp, .dbf, and .prj).<br>
+          GeoPackage (.gpkg) files need the local server; export them to GeoJSON instead.
         </p>
+        ${appendOptionHtml(hasTrails)}
         <label class="file-upload-btn">
-          <input type="file" accept=".geojson,.json,.kml" id="browser-trail-input" style="display:none">
+          <input type="file" accept="${TrailImport.ACCEPT}" id="browser-trail-input" style="display:none">
           Choose Trail File
         </label>
       </div>`;
@@ -215,27 +230,12 @@ const FilePicker = (() => {
     input.addEventListener('change', async () => {
       const file = input.files[0];
       if (!file) return;
+      const opts = { append: appendChecked(), fileName: file.name };
       try {
         body().innerHTML = '<div class="loading-spinner">Reading ' + file.name + '...</div>';
-        const text = await file.text();
-        const ext = file.name.split('.').pop().toLowerCase();
-        let data;
-
-        if (ext === 'kml') {
-          data = KmlUtils.kmlToGeoJSON(text);
-          console.log(`[KML] Converted ${file.name}: ${data.features.length} features`);
-        } else {
-          data = JSON.parse(text);
-        }
-
-        if (!data.features || !Array.isArray(data.features)) {
-          throw new Error('File does not contain valid features');
-        }
-        if (data.features.length === 0) {
-          throw new Error('No features found in file');
-        }
+        const data = await TrailImport.parseFile(file);
         close();
-        onSelect(null, null, null, data);
+        onSelect(null, null, null, data, opts);
       } catch (err) {
         body().innerHTML = '<div class="loading-spinner">Error: ' + err.message + '</div>';
       }

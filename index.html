@@ -49,8 +49,9 @@
     <div class="toolbar-group">
       <label>Export:</label>
       <button id="btn-undo" title="Undo last vertex move">Undo</button>
-      <button id="btn-export" title="Export edited trails as GeoJSON">GeoJSON</button>
-      <button id="btn-export-kml" title="Export edited trails as KML">KML</button>
+      <button id="btn-export" title="Export trails (with elevations and stats) and waypoints as GeoJSON">GeoJSON</button>
+      <button id="btn-export-kml" title="Export trails and waypoints as KML (Google Earth)">KML</button>
+      <button id="btn-export-gpx" title="Export trails and waypoints as GPX (GPS units, phone apps, Trail Router mobile)">GPX</button>
     </div>
     <div class="toolbar-group">
       <label>Base Map:</label>
@@ -334,6 +335,8 @@
   <script src="js/waypoints.js"></script>
   <script src="js/vertex-editor.js"></script>
   <script src="js/kml-utils.js"></script>
+  <script src="js/gpx-utils.js"></script>
+  <script src="js/trail-import.js"></script>
   <script src="js/draw-route.js"></script>
   <script src="js/export.js"></script>
   <script src="js/spring-mass.js"></script>
