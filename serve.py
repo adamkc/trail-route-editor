@@ -85,6 +85,10 @@ def gpkg_to_geojson(gpkg_path, layer_name):
 class TrailEditorHandler(http.server.SimpleHTTPRequestHandler):
     """HTTP handler with API endpoints for file discovery."""
 
+    # Drop connections that sit idle (e.g. browser preconnects that never
+    # send a request) instead of blocking on them forever.
+    timeout = 30
+
     def end_headers(self):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Headers', 'Range, Content-Type')
@@ -290,7 +294,10 @@ if __name__ == '__main__':
     # Try preferred port, then increment up to 10 times
     for attempt in range(10):
         try:
-            server = http.server.HTTPServer(('localhost', port), TrailEditorHandler)
+            # ThreadingHTTPServer: a slow or idle connection (browser
+            # preconnect, aborted upload, big DEM stream) must not block
+            # every other request — the single-threaded HTTPServer wedges.
+            server = http.server.ThreadingHTTPServer(('localhost', port), TrailEditorHandler)
             break
         except OSError:
             if attempt == 0:
@@ -301,9 +308,9 @@ if __name__ == '__main__':
         sys.exit(1)
     if port != preferred:
         print("Note: Port %d was busy, using %d instead." % (preferred, port))
-    print("Trail Editor server at http://localhost:%d" % port)
-    print("Project root: %s" % PROJECT_ROOT)
-    print("Press Ctrl+C to stop")
+    print("Trail Editor server at http://localhost:%d" % port, flush=True)
+    print("Project root: %s" % PROJECT_ROOT, flush=True)
+    print("Press Ctrl+C to stop", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
