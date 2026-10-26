@@ -47,8 +47,8 @@ const OptimizerUI = (() => {
         </div>
         <div class="modal-body">
           <div class="opt-summary">
-            <span>Length: <b>${origLen.toFixed(0)}m</b></span>
-            <span>Elev change: <b>${elevChange.toFixed(0)}m</b></span>
+            <span>Length: <b>${Units.fmtLen(origLen)}</b></span>
+            <span>Elev change: <b>${Units.fmtElev(elevChange)}</b></span>
             <span>Current grade: <b>${origGrade}%</b></span>
           </div>
 
@@ -272,7 +272,7 @@ const OptimizerUI = (() => {
         progressFill.style.width = pct + '%';
         const maxGStr = maxSegGrade != null ? ` | max seg: ${(maxSegGrade * 100).toFixed(1)}%` : '';
         progressText.textContent =
-          `iter ${iter}/${total} | MSE: ${mse.toFixed(1)} | grade: ${(grade * 100).toFixed(1)}% | length: ${length.toFixed(0)}m${maxGStr}`;
+          `iter ${iter}/${total} | MSE: ${mse.toFixed(1)} | grade: ${(grade * 100).toFixed(1)}% | length: ${Units.fmtLen(length)}${maxGStr}`;
       },
       onFrame(wgs84Coords) {
         // Live-update the preview trail on the map
@@ -304,8 +304,8 @@ const OptimizerUI = (() => {
         if (window._onOptimizerDone) window._onOptimizerDone(previewName);
         const s = result.stats;
         progressText.textContent =
-          `Done: ${(s.grade * 100).toFixed(1)}% grade, ${s.length.toFixed(0)}m ` +
-          `(was ${(s.origGrade * 100).toFixed(1)}%, ${s.origLength.toFixed(0)}m) — ${s.iterations} iterations`;
+          `Done: ${(s.grade * 100).toFixed(1)}% grade, ${Units.fmtLen(s.length)} ` +
+          `(was ${(s.origGrade * 100).toFixed(1)}%, ${Units.fmtLen(s.origLength)}) — ${s.iterations} iterations`;
       }
     } catch (err) {
       console.error('[Optimizer]', err);
@@ -397,7 +397,7 @@ const OptimizerUI = (() => {
 
       const s = result.stats;
       progressText.textContent =
-        `Phase 2 done: max seg grade ${(s.maxSegGrade * 100).toFixed(1)}% | length: ${s.length.toFixed(0)}m`;
+        `Phase 2 done: max seg grade ${(s.maxSegGrade * 100).toFixed(1)}% | length: ${Units.fmtLen(s.length)}`;
     } catch (err) {
       console.error('[Phase2]', err);
       progressText.textContent = 'Phase 2 error: ' + err.message;

@@ -7,11 +7,11 @@ const StatsPanel = (() => {
   let selectedTrail = null;
 
   const STAT_ROWS = [
-    { key: 'length_m',          label: 'Length',          fmt: v => `${v.toFixed(0)} m` },
-    { key: 'elev_min_m',        label: 'Elev Min',        fmt: v => `${v.toFixed(1)} m` },
-    { key: 'elev_max_m',        label: 'Elev Max',        fmt: v => `${v.toFixed(1)} m` },
-    { key: 'elev_gain_m',       label: 'Gain',            fmt: v => `${v.toFixed(1)} m` },
-    { key: 'elev_loss_m',       label: 'Loss',            fmt: v => `${v.toFixed(1)} m` },
+    { key: 'length_m',          label: 'Length',          fmt: v => Units.fmtLen(v) },
+    { key: 'elev_min_m',        label: 'Elev Min',        fmt: v => Units.fmtElev(v, 1) },
+    { key: 'elev_max_m',        label: 'Elev Max',        fmt: v => Units.fmtElev(v, 1) },
+    { key: 'elev_gain_m',       label: 'Gain',            fmt: v => Units.fmtElev(v, 1) },
+    { key: 'elev_loss_m',       label: 'Loss',            fmt: v => Units.fmtElev(v, 1) },
     { key: 'avg_grade_pct',     label: 'Avg Grade',       fmt: v => `${v.toFixed(1)}%` },
     { key: 'max_grade_pct',     label: 'Max Grade',       fmt: v => `${v.toFixed(1)}%` },
     { key: 'pct_over_8',        label: '>8%',             fmt: v => `${v.toFixed(1)}%` },
@@ -89,6 +89,8 @@ const StatsPanel = (() => {
     const panel = document.getElementById('stats-panel');
     if (panel) panel.innerHTML = '';
   }
+
+  Units.onChange(rebuildTable);
 
   return { updateStats, updateSegmentTable, clear, clearAll, removeTrail };
 })();

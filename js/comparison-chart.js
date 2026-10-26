@@ -33,14 +33,14 @@ const ComparisonChart = (() => {
 
     function handleHover(evt, elements, chart) {
       if (!onHoverCallback || elements.length === 0) return;
-      const dist = elements[0].element.$context.parsed.x;
+      const dist = Units.distToM(elements[0].element.$context.parsed.x);
       const coord = coordAtDistance(dist);
       if (coord) onHoverCallback(coord);
     }
 
     function handleClick(evt, elements, chart) {
       if (!onClickCallback || elements.length === 0) return;
-      const dist = elements[0].element.$context.parsed.x;
+      const dist = Units.distToM(elements[0].element.$context.parsed.x);
       const coord = coordAtDistance(dist);
       if (coord) onClickCallback(coord);
     }
@@ -92,7 +92,7 @@ const ComparisonChart = (() => {
           },
           tooltip: {
             callbacks: {
-              label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y != null ? ctx.parsed.y.toFixed(1) : '?'}m`
+              label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y != null ? ctx.parsed.y.toFixed(Units.isImperial() ? 0 : 1) : '?'} ${Units.elevUnit()}`
             }
           }
         },
@@ -142,26 +142,19 @@ const ComparisonChart = (() => {
     currentOrigSegments = origSegments;
     currentOrigCoords = origCoords;
 
-    // Original elevation: {x: distance, y: elevation}
-    const origData = [];
-    if (origSegments.length > 0) {
-      origData.push({ x: 0, y: origSegments[0].elevStart });
-      for (const seg of origSegments) {
-        origData.push({ x: seg.distEnd, y: seg.elevEnd });
-      }
-    }
+    // {x: distance, y: elevation} in display units
+    const ev = (e) => e == null ? null : Units.elev(e);
+    const profile = (segs) => {
+      if (!segs.length) return [];
+      const out = [{ x: 0, y: ev(segs[0].elevStart) }];
+      for (const seg of segs) out.push({ x: Units.dist(seg.distEnd), y: ev(seg.elevEnd) });
+      return out;
+    };
 
-    // Optimized elevation: {x: distance, y: elevation}
-    const optData = [];
-    if (optSegments.length > 0) {
-      optData.push({ x: 0, y: optSegments[0].elevStart });
-      for (const seg of optSegments) {
-        optData.push({ x: seg.distEnd, y: seg.elevEnd });
-      }
-    }
-
-    chart.data.datasets[0].data = origData;
-    chart.data.datasets[1].data = optData;
+    chart.data.datasets[0].data = profile(origSegments);
+    chart.data.datasets[1].data = profile(optSegments);
+    chart.options.scales.x.title.text = `Distance (${Units.distUnit()})`;
+    chart.options.scales.y.title.text = `Elevation (${Units.elevUnit()})`;
     chart.update('none');
   }
 

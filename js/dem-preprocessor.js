@@ -17,6 +17,7 @@ const DemPreprocessor = (() => {
   let crsInfo = null;      // from DemCrs.describe
   let transformer = null;  // DEM CRS <-> WGS84
   let verticalUnits = 'm';
+  let sourceLabel = null;  // file name or data source, shown in the Storage dialog
   let roiRaster = null;    // processed raster in working UTM (temporary during preprocessing)
 
   // Uncompressed raster size above which "around trails" is the default area
@@ -32,6 +33,7 @@ const DemPreprocessor = (() => {
    */
   async function loadHeader(source, fileName, fileSize) {
     demId = CacheStore.makeDemId(fileName, fileSize || 0);
+    sourceLabel = fileName;
     header = await DemSampler.initHeaderOnly(source, fileName);
     crsInfo = DemCrs.describe(header.geoKeys);
     transformer = null;
@@ -375,6 +377,7 @@ const DemPreprocessor = (() => {
       roiBounds: rasterBoundsWgs84(roi),
       crs: Projection.getCrs(),
       sourceCrs: crsInfo ? crsInfo.label : null,
+      label: sourceLabel,
       verticalUnits
     });
 
@@ -820,12 +823,13 @@ const DemPreprocessor = (() => {
    * Hand the pipeline a raster that is already in working UTM (e.g. fetched
    * from a web service) instead of reading it from a GeoTIFF.
    */
-  function setRoiRaster(raster, id, sourceLabel) {
+  function setRoiRaster(raster, id, label) {
     demId = id;
     roiRaster = raster;
     header = null;
     transformer = null;
-    crsInfo = { kind: 'utm', label: sourceLabel || Projection.getCrs().label };
+    sourceLabel = label;
+    crsInfo = { kind: 'utm', label: Projection.getCrs().label };
     verticalUnits = 'm';
   }
 

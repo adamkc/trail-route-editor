@@ -67,7 +67,8 @@
       <button id="btn-hillshade" class="basemap-btn active">Hillshade</button>
       <button id="btn-satellite" class="basemap-btn">Satellite</button>
       <button id="btn-recenter" title="Reset map: flat view, fit to trails">Recenter</button>
-      <button id="btn-clear-cache" title="Clear cached terrain tiles and preprocessed data">Clear Cache</button>
+      <button id="btn-clear-cache" title="See and delete processed DEMs kept in this browser">Storage</button>
+      <button id="btn-units" title="Switch between metric (m, km) and US (ft, mi) units">Units: m</button>
       <button id="btn-guide" title="Quick use guide">Guide</button>
     </div>
     <div id="status-bar"></div>
@@ -327,6 +328,7 @@
   </div>
 
   <!-- App modules -->
+  <script src="js/units.js"></script>
   <script src="js/notice.js"></script>
   <script src="js/file-picker.js"></script>
   <script src="js/projection.js"></script>

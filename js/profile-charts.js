@@ -19,9 +19,11 @@ const ProfileCharts = (() => {
       if (!xScale) return;
       ctx.save();
       ctx.fillStyle = 'rgba(0, 31, 92, 0.18)'; // navy, semi-transparent
+      // The elevation chart's x axis is in display units; the slope chart's is categorical
+      const conv = xScale.type === 'linear' ? Units.dist : (d) => d;
       for (const zone of drainageZones) {
-        const xStart = xScale.getPixelForValue(zone.startDist);
-        const xEnd = xScale.getPixelForValue(zone.endDist);
+        const xStart = xScale.getPixelForValue(conv(zone.startDist));
+        const xEnd = xScale.getPixelForValue(conv(zone.endDist));
         const left = Math.max(xStart, chartArea.left);
         const right = Math.min(xEnd, chartArea.right);
         if (right > left) {
@@ -94,7 +96,7 @@ const ProfileCharts = (() => {
       if (!onHoverCallback || !elements.length) return;
       const parsed = elements[0].element?.$context?.parsed;
       if (!parsed) return;
-      const coord = coordAtDistance(parsed.x);
+      const coord = coordAtDistance(Units.distToM(parsed.x));
       if (coord) onHoverCallback(coord);
     }
 
@@ -102,7 +104,7 @@ const ProfileCharts = (() => {
       if (!onClickCallback || !elements.length) return;
       const parsed = elements[0].element?.$context?.parsed;
       if (!parsed) return;
-      const coord = coordAtDistance(parsed.x);
+      const coord = coordAtDistance(Units.distToM(parsed.x));
       if (coord) onClickCallback(coord);
     }
 
@@ -148,7 +150,8 @@ const ProfileCharts = (() => {
           ...chartDefaults.plugins,
           tooltip: {
             callbacks: {
-              label: (ctx) => `${ctx.parsed.y != null ? ctx.parsed.y.toFixed(1) : '?'}m @ ${ctx.parsed.x.toFixed(0)}m`
+              label: (ctx) => `${ctx.parsed.y != null ? ctx.parsed.y.toFixed(Units.isImperial() ? 0 : 1) : '?'} ${Units.elevUnit()}` +
+                              ` @ ${Units.fmtLen(Units.distToM(ctx.parsed.x))}`
             }
           }
         }
@@ -228,7 +231,7 @@ const ProfileCharts = (() => {
                 if (items.length === 0) return '';
                 const idx = items[0].dataIndex;
                 if (idx < currentSegments.length) {
-                  return `${currentSegments[idx].distStart.toFixed(0)} – ${currentSegments[idx].distEnd.toFixed(0)} m`;
+                  return `${Units.fmtLen(currentSegments[idx].distStart)} – ${Units.fmtLen(currentSegments[idx].distEnd)}`;
                 }
                 return '';
               },
@@ -296,16 +299,20 @@ const ProfileCharts = (() => {
     currentSegments = segments;
     if (coords) currentCoords = coords;
 
-    // Elevation profile — {x: distance, y: elevation} points
+    // Elevation profile — {x: distance, y: elevation} points in display units
     const elevData = [];
+    const ev = (e) => e == null ? null : Units.elev(e);
     if (segments.length > 0) {
-      elevData.push({ x: 0, y: segments[0].elevStart });
+      elevData.push({ x: 0, y: ev(segments[0].elevStart) });
       for (const seg of segments) {
-        elevData.push({ x: seg.distEnd, y: seg.elevEnd });
+        elevData.push({ x: Units.dist(seg.distEnd), y: ev(seg.elevEnd) });
       }
     }
     elevChart.data.datasets[0].data = elevData;
+    elevChart.options.scales.x.title.text = `Distance (${Units.distUnit()})`;
+    elevChart.options.scales.y.title.text = `Elevation (${Units.elevUnit()})`;
     elevChart.update('none');
+    slopeChart.options.scales.x.title.text = `Distance (${Units.distUnit()})`;
 
     // Slope profile — still categorical (bars need equal width visually)
     // but labels show actual distance values

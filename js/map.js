@@ -3,6 +3,7 @@
  */
 const TrailMap = (() => {
   let map = null;
+  let scaleControl = null;
 
   // Trail colors from SimplifyTrail.R
   const TRAIL_COLORS = {
@@ -58,7 +59,8 @@ const TrailMap = (() => {
     await new Promise(resolve => map.on('load', resolve));
 
     // Scale bar
-    map.addControl(new maplibregl.ScaleControl({ maxWidth: 150, unit: 'metric' }), 'bottom-left');
+    scaleControl = new maplibregl.ScaleControl({ maxWidth: 150, unit: Units.isImperial() ? 'imperial' : 'metric' });
+    map.addControl(scaleControl, 'bottom-left');
 
     // Auto-recover from NaN/matrix errors (3D terrain + extreme zoom can corrupt the transform)
     let recovering = false;
@@ -906,6 +908,7 @@ const TrailMap = (() => {
 
   function getMap() { return map; }
   function getTrailColors() { return TRAIL_COLORS; }
+  function setScaleUnit(unit) { if (scaleControl) scaleControl.setUnit(unit); }
 
   /**
    * Dim non-selected trail lines when a specific trail is selected.
@@ -940,5 +943,5 @@ const TrailMap = (() => {
     }
   }
 
-  return { init, addTrails, removeLayers, updateTrailColors, showBasemap, fitToTrails, recenter, setHoverPoint, showGradeSegments, clearGradeSegments, showDrainageZones, clearDrainageZones, showContours, enable3DTerrain, enable3DTerrainFromCache, enableTiledContours, showDemExtent, clearDemExtent, getMap, getTrailColor, getTrailColors, highlightTrail };
+  return { init, addTrails, removeLayers, updateTrailColors, showBasemap, fitToTrails, recenter, setHoverPoint, showGradeSegments, clearGradeSegments, showDrainageZones, clearDrainageZones, showContours, enable3DTerrain, enable3DTerrainFromCache, enableTiledContours, showDemExtent, clearDemExtent, getMap, getTrailColor, getTrailColors, highlightTrail, setScaleUnit };
 })();

@@ -10,9 +10,10 @@
  *   terrain-tiles  — Terrarium-encoded PNG tiles (keyed by 'demId/z/x/y')
  *   contours       — Legacy full-raster contour cache (backward compat)
  *
- * All operations are fail-safe: if IndexedDB is unavailable or blocked,
- * reads return null and writes are silently skipped. The app continues
- * without caching (data is regenerated each session).
+ * All operations are fail-safe: if IndexedDB is unavailable, blocked, or
+ * full, reads return null and writes fall back to memory for tiles and
+ * metadata (so the current session still renders; nothing persists).
+ * onWriteError(err) is called once per session on the first failed write.
  */
 const CacheStore = (() => {
   const DB_NAME = 'trail-editor-v2';
@@ -29,6 +30,15 @@ const CacheStore = (() => {
   let dbPromise = null;
   let dbUnavailable = false;
   let openAttempts = 0;
+  const mem = new Map();        // 'store|key' → value, for writes IndexedDB refused
+  let writeErrorReported = false;
+  let onWriteError = null;
+
+  function reportWriteError(e) {
+    if (writeErrorReported) return;
+    writeErrorReported = true;
+    if (onWriteError) onWriteError(e);
+  }
 
   function open() {
     if (dbUnavailable) return Promise.reject(new Error('IndexedDB unavailable'));
@@ -117,7 +127,9 @@ const CacheStore = (() => {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(storeName, 'readwrite');
       const req = tx.objectStore(storeName).put(value, key);
-      req.onsuccess = () => resolve();
+      // Quota errors can surface on the transaction rather than the request
+      tx.oncomplete = () => resolve();
+      tx.onabort = () => reject(tx.error || req.error || new Error('Transaction aborted'));
       req.onerror = () => reject(req.error);
     });
   }
@@ -135,13 +147,19 @@ const CacheStore = (() => {
   // ── Public API ──
 
   async function getMetadata(demId) {
+    if (mem.has('metadata|' + demId)) return mem.get('metadata|' + demId);
     try { return await _get('metadata', demId); }
     catch (e) { return null; }
   }
 
   async function putMetadata(demId, meta) {
-    try { return await _put('metadata', demId, { ...meta, demId, timestamp: Date.now() }); }
-    catch (e) { console.warn('[CacheStore] putMetadata failed:', e.message); }
+    const value = { ...meta, demId, timestamp: Date.now() };
+    try { return await _put('metadata', demId, value); }
+    catch (e) {
+      console.warn('[CacheStore] putMetadata failed:', e.message);
+      mem.set('metadata|' + demId, value);
+      reportWriteError(e);
+    }
   }
 
   /**
@@ -160,7 +178,9 @@ const CacheStore = (() => {
       };
       return await _put(storeName, demId, stored);
     } catch (e) {
+      // Grids are already in memory (RoiSampler / rebuilt by the optimizer)
       console.warn('[CacheStore] putGrid failed:', e.message);
+      reportWriteError(e);
     }
   }
 
@@ -189,13 +209,34 @@ const CacheStore = (() => {
 
   async function putTile(storeName, key, data) {
     try { return await _put(storeName, key, data); }
-    catch (e) { /* skip silently */ }
+    catch (e) {
+      mem.set(storeName + '|' + key, data);
+      reportWriteError(e);
+    }
   }
 
   async function getTile(storeName, key) {
+    const k = storeName + '|' + key;
+    if (mem.has(k)) return mem.get(k);
     try { return await _get(storeName, key); }
     catch (e) { return null; }
   }
+
+  /** All cached DEM metadata records (one per processed DEM). */
+  async function listDems() {
+    try {
+      const db = await open();
+      return await new Promise((resolve) => {
+        const req = db.transaction('metadata', 'readonly').objectStore('metadata').getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => resolve([]);
+      });
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function setWriteErrorHandler(fn) { onWriteError = fn; }
 
   /**
    * Check if a preprocessed DEM exists in cache.
@@ -216,6 +257,10 @@ const CacheStore = (() => {
    * Remove all cached data for a specific DEM.
    */
   async function clearDem(demId) {
+    for (const k of [...mem.keys()]) {
+      const key = k.slice(k.indexOf('|') + 1);
+      if (key === demId || key.startsWith(demId + '/')) mem.delete(k);
+    }
     try {
       const db = await open();
       // Clear metadata + grids (direct key deletes)
@@ -274,7 +319,7 @@ const CacheStore = (() => {
   return {
     open, getMetadata, putMetadata,
     putGrid, getGrid,
-    putTile, getTile,
+    putTile, getTile, listDems, setWriteErrorHandler,
     hasCachedDem, clearDem,
     makeDemId, reset, disable
   };

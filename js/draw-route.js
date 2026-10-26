@@ -174,7 +174,7 @@ const DrawRoute = (() => {
 
     // Elevation at cursor
     if (cursorElev != null) {
-      lines.push(`Elev: ${Math.round(cursorElev)}m`);
+      lines.push(`Elev: ${Units.fmtElev(cursorElev)}`);
     }
 
     // Segment info (from last vertex)
@@ -183,7 +183,7 @@ const DrawRoute = (() => {
       if (lastElev != null && cursorElev != null) {
         const de = cursorElev - lastElev;
         const slope = (de / segDist) * 100;
-        segLine += ` | ${de >= 0 ? '+' : ''}${de.toFixed(1)}m | ${slope.toFixed(1)}%`;
+        segLine += ` | ${de >= 0 ? '+' : ''}${Units.fmtElev(de, 1)} | ${slope.toFixed(1)}%`;
       }
       lines.push(segLine);
     }
@@ -205,7 +205,7 @@ const DrawRoute = (() => {
     if (!tooltipEl) return;
     const elev = sampleElev(rubberCoord);
     if (elev != null) {
-      tooltipEl.textContent = `Elev: ${Math.round(elev)}m`;
+      tooltipEl.textContent = `Elev: ${Units.fmtElev(elev)}`;
       tooltipEl.classList.remove('hidden');
       positionTooltip(screenPoint);
     } else {
@@ -224,8 +224,7 @@ const DrawRoute = (() => {
   }
 
   function formatDist(meters) {
-    if (meters >= 1000) return (meters / 1000).toFixed(2) + 'km';
-    return Math.round(meters) + 'm';
+    return Units.fmtLen(meters);
   }
 
   function handleKey(e) {

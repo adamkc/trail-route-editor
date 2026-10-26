@@ -829,35 +829,88 @@
     VertexEditor.undo();
   });
 
-  document.getElementById('btn-clear-cache').addEventListener('click', async () => {
-    if (!confirm('Clear all cached terrain data? You will need to re-process any large DEMs.')) return;
-    try {
-      // Close the active DB connection first so deleteDatabase doesn't block
-      CacheStore.reset();
-      // Wait for close to complete
-      await new Promise(r => setTimeout(r, 200));
+  // ── Storage: processed DEMs kept in browser storage ──
+  CacheStore.setWriteErrorHandler((e) => {
+    const full = e && /quota/i.test(e.name + ' ' + e.message);
+    Notice.show('storage',
+      (full ? 'Browser storage is full, ' : 'The browser refused to store terrain data, ') +
+      'so this DEM will not be kept for next time (it works for this session). Open Storage to free space.',
+      { level: 'warn', actions: [{ label: 'Storage', onClick: openStorageDialog }] });
+  });
 
-      // Properly await each deleteDatabase call
-      await new Promise((resolve) => {
-        const req = indexedDB.deleteDatabase('trail-editor-v2');
-        req.onsuccess = () => { console.log('[app] Deleted trail-editor-v2'); resolve(); };
-        req.onerror = () => { console.warn('[app] Failed to delete trail-editor-v2'); resolve(); };
-        req.onblocked = () => { console.warn('[app] Delete blocked — will complete on reload'); resolve(); };
-      });
-      await new Promise((resolve) => {
-        const req = indexedDB.deleteDatabase('trail-editor-cache');
-        req.onsuccess = () => resolve();
-        req.onerror = () => resolve();
-        req.onblocked = () => resolve();
-      });
+  // Ask once for storage the browser will not evict under pressure
+  if (navigator.storage && navigator.storage.persist) {
+    navigator.storage.persisted().then(p => { if (!p) navigator.storage.persist().catch(() => {}); }).catch(() => {});
+  }
 
-      cachedDemId = null;
-      RoiSampler.release();
-      demLoaded = false;
-      status('Cache cleared — reload the page to continue');
-    } catch (e) {
-      status('Failed to clear cache: ' + e.message);
+  const fmtBytes = (b) => b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : Math.max(1, Math.round(b / 1e6)) + ' MB';
+
+  async function openStorageDialog() {
+    const body = document.createElement('div');
+    body.style.cssText = 'font-size: 13px; line-height: 1.5; color: #c0c0c0; min-width: 460px; max-width: 620px;';
+    const p = (text, css) => { const el = document.createElement('p'); el.style.cssText = 'margin: 0 0 10px;' + (css || ''); el.textContent = text; body.appendChild(el); return el; };
+
+    let usage = '';
+    if (navigator.storage && navigator.storage.estimate) {
+      try {
+        const est = await navigator.storage.estimate();
+        const persisted = navigator.storage.persisted ? await navigator.storage.persisted() : false;
+        usage = `Using ${fmtBytes(est.usage || 0)} of about ${fmtBytes(est.quota || 0)} available to this site` +
+                (persisted ? '; the browser will keep it.' : '; the browser may clear it if disk space runs low.');
+      } catch (e) {}
     }
+    p('Processed terrain is kept in this browser so DEMs load instantly next time. ' + usage);
+
+    const dems = (await CacheStore.listDems()).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    if (!dems.length) p('No processed DEMs are stored.', 'color:#888;');
+    const table = document.createElement('div');
+    table.style.cssText = 'display: grid; grid-template-columns: 1fr auto auto auto; gap: 6px 14px; align-items: center; margin-bottom: 8px;';
+    for (const m of dems) {
+      const name = document.createElement('div');
+      name.textContent = (m.label || m.demId) + (m.demId === cachedDemId ? ' (in use)' : '');
+      name.style.color = m.demId === cachedDemId ? '#e0e0e0' : '';
+      const size = document.createElement('div');
+      // ROI raster + aspect grid dominate; tiles add a little
+      size.textContent = '~' + fmtBytes((m.roiWidth || 0) * (m.roiHeight || 0) * 4 * 2.2);
+      const when = document.createElement('div');
+      when.textContent = m.timestamp ? new Date(m.timestamp).toLocaleDateString() : '';
+      const del = document.createElement('button');
+      del.textContent = 'Delete';
+      del.className = 'opt-btn opt-btn-sm';
+      del.addEventListener('click', async () => {
+        if (m.demId === cachedDemId &&
+            !confirm('This DEM is in use. Delete its stored terrain? It stays loaded until you reload the page.')) return;
+        del.disabled = true;
+        await CacheStore.clearDem(m.demId);
+        hideModal();
+        openStorageDialog();
+      });
+      table.append(name, size, when, del);
+    }
+    body.appendChild(table);
+
+    const buttons = [{ label: 'Close' }];
+    if (dems.some(m => m.demId !== cachedDemId)) {
+      buttons.unshift({ label: 'Delete all except current', onClick: async () => {
+        for (const m of dems) if (m.demId !== cachedDemId) await CacheStore.clearDem(m.demId);
+        openStorageDialog();
+      } });
+    }
+    showModal('Storage', body, buttons);
+  }
+
+  document.getElementById('btn-clear-cache').addEventListener('click', openStorageDialog);
+
+  // ── Units ──
+  const btnUnits = document.getElementById('btn-units');
+  const syncUnitsButton = () => { btnUnits.textContent = Units.isImperial() ? 'Units: ft' : 'Units: m'; };
+  syncUnitsButton();
+  btnUnits.addEventListener('click', () => Units.set(Units.isImperial() ? 'metric' : 'imperial'));
+  Units.onChange(() => {
+    syncUnitsButton();
+    TrailMap.setScaleUnit(Units.isImperial() ? 'imperial' : 'metric');
+    const name = selector.value;
+    if (name && name !== '__all__') showTrailData(name);
   });
 
   function exportBaseName() {
